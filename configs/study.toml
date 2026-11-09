@@ -1,6 +1,6 @@
 # harness-bench study configuration, round 1.
-# 4 configurations x 20 main ResearchRubrics questions x 1 run = 80 scored outputs,
-# plus 4 x 2 smoke questions = 8 unscored outputs. 22 questions, 88 outputs before retries.
+# 5 configurations x 15 main ResearchRubrics questions x 1 run = 75 scored outputs,
+# plus 5 x 2 smoke questions = 10 unscored outputs. 17 questions, 85 outputs before retries.
 # The sha256 of this file is stamped on every manifest, run and result. Changing it after a
 # manifest is frozen makes `hb verify` fail; later changes go in amendments/.
 
@@ -23,9 +23,9 @@ output = 0.0
 [funding.anthropic]
 planned_usd = 310.0              # total for this round
 [funding.anthropic.pools]        # a pool can never borrow from another pool
-smoke = 26.0                     # 2 x ($1 + 3 x $4)
-main = 260.0                     # 20 x ($1 + 3 x $4)
-buffer = 24.0                    # paid preflight, infrastructure retries, contingency
+smoke = 34.0                     # 2 x ($1 + 4 x $4)
+main = 255.0                     # 15 x ($1 + 4 x $4)
+buffer = 21.0                    # paid preflight, infrastructure retries, contingency
 [funding.jev]
 planned_usd = 10.0
 [funding.jev.pools]
@@ -33,7 +33,7 @@ grading = 10.0
 [funding.exa]
 planned_usd = 45.0
 [funding.exa.pools]
-research = 45.0                  # 66 research runs x $0.60 per-run cap = $39.60, plus retries
+research = 45.0                  # 68 research runs x $0.60 per-run cap = $40.80, plus retries
 
 # ------------------------------------------------------------------ dataset (pinned, hash-checked)
 [datasets.researchrubrics]
@@ -44,7 +44,7 @@ sha256 = "ea2023d03953b70ba4a2f7f1fe490b434f18cec26c4fdb48acc0e3edf3d8edfb"
 
 [sampling]                       # the selection itself is frozen in configs/splits.json (task ids only)
 seed = "harness-bench-2026-11"
-main = 20
+main = 15
 smoke = 2
 excluded = []                    # never "closed-book solved it"
 
@@ -70,7 +70,7 @@ infra_retries = 1                # one re-attempt for an infrastructure failure,
 kill_grace_s = 60
 
 [tools]
-backend = "exa"                  # one backend for B, C and D. No fallback backend.
+backend = "exa"                  # one backend for B, C, D and E. No fallback backend.
 search_type = "auto"             # Exa retrieval. The synthesising modes (deep*) are not used.
 search_max_results = 5
 snippet_chars = 500              # raw page text. Exa highlights and summaries are model-generated and are not requested.
@@ -129,6 +129,23 @@ shims = ["pin_effort"]
 HB_DEEPAGENTS_EXAMPLE = "{root}/adapters/vendor/deepagents/examples/deep_research"
 HB_MAX_TOKENS = "16000"
 
+[systems.hyperresearch]          # E, modified configuration (Claude Code runtime)
+kind = "subprocess"
+budget = "research"
+command = "{root}/adapters/.venv-hyperresearch/bin/python {root}/adapters/hyperresearch_driver.py"
+shims = ["pin_effort"]
+[systems.hyperresearch.env]
+ANTHROPIC_MODEL = "{model}"
+CLAUDE_CODE_SUBAGENT_MODEL = "{model}"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "{model}"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "{model}"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "{model}"
+ANTHROPIC_SMALL_FAST_MODEL = "{model}"
+DISABLE_TELEMETRY = "1"
+DISABLE_AUTOUPDATER = "1"
+DISABLE_ERROR_REPORTING = "1"
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+
 # ------------------------------------------------------------------ judges (evaluator process only)
 [judges.jev]
 model = "jev-1.14.0"             # versioned id, never an alias
@@ -168,7 +185,8 @@ closed_book = "closed_book"
 plain = "plain_tools"
 n_boot = 10000
 boot_seed = 20261109
-primary_pairs = [["closed_book", "plain_tools"], ["plain_tools", "gpt_researcher"], ["plain_tools", "deepagents"]]
+primary_pairs = [["closed_book", "plain_tools"], ["plain_tools", "gpt_researcher"], ["plain_tools", "deepagents"],
+                 ["plain_tools", "hyperresearch"]]
 
 [freeze]
 require_clean_tagged_commit_for_main = true   # main runs refuse to start from an uncommitted or untagged tree

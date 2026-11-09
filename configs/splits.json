@@ -10,6 +10,32 @@
       "rr-605371",
       "rr-6053bb",
       "rr-6053c9",
+      "rr-6053f5",
+      "rr-60542a",
+      "rr-605433",
+      "rr-60543e",
+      "rr-605441",
+      "rr-605469",
+      "rr-60548a",
+      "rr-9af308",
+      "rr-9af316",
+      "rr-9af31b",
+      "rr-9af31d",
+      "rr-9af332"
+    ],
+    "smoke": [
+      "rr-6053f2",
+      "rr-95846f"
+    ]
+  },
+  "main_subset": {
+    "rule": "seeded stratified subset of the original 20: every domain keeps one question; five domains chosen by the seeded shuffle keep both",
+    "seed": "harness-bench-2026-11:main15",
+    "selected_on": "2026-11-09",
+    "original_20": [
+      "rr-605371",
+      "rr-6053bb",
+      "rr-6053c9",
       "rr-6053d0",
       "rr-6053f5",
       "rr-605401",
@@ -28,9 +54,12 @@
       "rr-9af31d",
       "rr-9af332"
     ],
-    "smoke": [
-      "rr-6053f2",
-      "rr-95846f"
+    "not_used": [
+      "rr-6053d0",
+      "rr-605401",
+      "rr-605407",
+      "rr-605414",
+      "rr-605451"
     ]
   }
 }

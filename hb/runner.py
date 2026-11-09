@@ -141,7 +141,7 @@ def run_one(cfg: dict, cdir: Path, gw: Gateway, sched: dict, question: str, budg
     return meta
 
 
-def run_campaign(cfg: dict, cdir: Path, mock: bool, workers: int) -> dict:
+def run_campaign(cfg: dict, cdir: Path, mock: bool, workers: int, only: list[str] | None = None) -> dict:
     tasks = load_public()
     manifest = read_jsonl(cdir / "manifest.jsonl")
     camp = read_json(cdir / "campaign.json")
@@ -162,6 +162,9 @@ def run_campaign(cfg: dict, cdir: Path, mock: bool, workers: int) -> dict:
     def do_block(rows: list[dict]) -> list[str]:
         out = []
         for row in sorted(rows, key=lambda r: r["position"]):
+            if only and row["system"] not in only:
+                out.append("deferred")  # staged execution of the same frozen manifest; run again without the filter
+                continue
             m = run_one(cfg, cdir, gw, row, tasks[row["task_id"]]["question"], budgets, camp)
             out.append(m["status"] if m else "not_dispatched_budget")
         return out

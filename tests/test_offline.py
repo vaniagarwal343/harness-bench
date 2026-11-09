@@ -129,19 +129,19 @@ def _budget(tmp_path, monkeypatch, confirmed=210.0):
 
 def test_pools_do_not_borrow_and_confirmed_funding_is_a_hard_limit(tmp_path, monkeypatch):
     b, cfg = _budget(tmp_path, monkeypatch)
-    for i in range(6):
-        b.reserve("buffer", f"retry{i}", 4.0)  # 6 x $4 = the whole $24 buffer
+    for i in range(5):
+        b.reserve("buffer", f"retry{i}", 4.0)  # 5 x $4 = $20 of the $21 buffer
     with pytest.raises(budget.BudgetRefused, match="buffer"):
         b.reserve("buffer", "retry7", 4.0)  # debugging cannot dip into the main allocation
-    for i in range(46):
-        b.reserve("main", f"m{i}", 4.0)  # 24 + 184 = 208 committed
+    for i in range(47):
+        b.reserve("main", f"m{i}", 4.0)  # 20 + 188 = 208 committed
     with pytest.raises(budget.BudgetRefused, match="confirmed funding"):
-        b.reserve("main", "m46", 4.0)  # would pass $210 that is actually in the account
+        b.reserve("main", "m47", 4.0)  # would pass $210 that is actually in the account
     b.reconcile("m0", 1.25)  # actual use frees the difference
-    b.reserve("main", "m46", 4.0)
+    b.reserve("main", "m47", 4.0)
     again = budget.Budget("anthropic", cfg)  # a new process sees the same state
     st = again.status()
-    assert abs(st["committed"] - (24 + 45 * 4 + 1.25 + 4)) < 1e-6 and len(st["open"]) == 6 + 46 and not st["over_reservation"]
+    assert abs(st["committed"] - (20 + 46 * 4 + 1.25 + 4)) < 1e-6 and len(st["open"]) == 5 + 47 and not st["over_reservation"]
 
 
 def test_no_confirmed_funding_on_file_means_nothing_can_be_reserved(tmp_path, monkeypatch):
@@ -153,10 +153,10 @@ def test_no_confirmed_funding_on_file_means_nothing_can_be_reserved(tmp_path, mo
 
 def test_plan_arithmetic_matches_the_agreed_counts():
     assert budget.plan_check(CFG) == []
-    assert CFG["sampling"]["main"] == 20 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 4
+    assert CFG["sampling"]["main"] == 15 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 5
     assert CFG["systems"]["closed_book"]["max_tokens"] * CFG["pricing"]["contestant"]["output"] / 1e6 < CFG["budget"]["closed_book"]["max_cost_usd"]
-    bad = dict(CFG, sampling=dict(CFG["sampling"], main=21))
-    assert any("main" in p for p in budget.plan_check(bad))  # a 21st question does not fit; it is reported, not trimmed
+    bad = dict(CFG, sampling=dict(CFG["sampling"], main=16))
+    assert any("main" in p for p in budget.plan_check(bad))  # a 16th question does not fit; it is reported, not trimmed
 
 
 # ---------------------------------------------------------------- scoring semantics

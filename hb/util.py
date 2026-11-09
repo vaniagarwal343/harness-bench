@@ -117,7 +117,7 @@ def scrubbed_env(extra: dict[str, str]) -> dict[str, str]:
     """Environment for a contestant subprocess: no secrets, plus explicit run-scoped values."""
     env = {}
     for k, v in os.environ.items():
-        if any(m in k for m in _SECRET_MARKERS):
+        if any(m in k for m in _SECRET_MARKERS) or k.startswith(("CLAUDE", "HB_")):
             continue
         env[k] = v
     env.update(extra)

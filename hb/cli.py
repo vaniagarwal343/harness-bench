@@ -29,7 +29,7 @@ from . import analysis, datasets, grading, runner, verify as V
 from .budget import Budget, BudgetRefused, plan_check
 from .util import ROOT, campaign_dir, git_state, load_config, read_json, read_jsonl, secret, sha256_text
 
-SYSTEMS = "closed_book,plain_tools,gpt_researcher,deepagents"
+SYSTEMS = "closed_book,plain_tools,gpt_researcher,deepagents,hyperresearch"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("schedule"); s.add_argument("campaign"); s.add_argument("--split", required=True, choices=["smoke", "main"])
     s.add_argument("--systems", default=SYSTEMS); s.add_argument("--limit", type=int); s.add_argument("--mock", action="store_true")
     s = sub.add_parser("run"); s.add_argument("campaign"); s.add_argument("--mock", action="store_true"); s.add_argument("--workers", type=int, default=2)
+    s.add_argument("--only", help="run only these configurations now (comma-separated); the rest stay scheduled")
     s = sub.add_parser("grade"); s.add_argument("campaign"); s.add_argument("--mock", action="store_true")
     s.add_argument("--judges", default="astra,jev"); s.add_argument("--limit", type=int, help="grade only the first N runs")
     s.add_argument("--retry-errors", action="store_true", help="give items stuck in an error state one fresh bounded round")
@@ -83,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"froze {len(rows)} scheduled runs ({len({r['task_id'] for r in rows})} questions x {len(a.systems.split(','))} configurations) "
               f"in {cdir / 'manifest.jsonl'}; pool={a.split}; commit={git_state()['commit']}"); return 0
     if a.cmd == "run":
-        print(json.dumps(runner.run_campaign(cfg, cdir, a.mock, a.workers), indent=2)); return 0
+        print(json.dumps(runner.run_campaign(cfg, cdir, a.mock, a.workers, a.only.split(',') if a.only else None), indent=2)); return 0
     tasks = datasets.load_with_rubrics()  # evaluator-side commands only, below this line
     camp = read_json(cdir / "campaign.json")
     if a.cmd == "grade":

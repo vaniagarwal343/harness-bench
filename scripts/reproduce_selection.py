@@ -1,8 +1,9 @@
 """Reproduce the frozen task selection in configs/splits.json from the pinned public datasets.
 
 The selection was drawn once, on 2026-11-09, before any contestant output existed, by a seeded
-sampler stratified by domain (equal allocation, 2 main questions per ResearchRubrics domain) over
+sampler stratified by domain (equal allocation, 2 questions per ResearchRubrics domain, 20 in all) over
 ResearchRubrics and DRACO. DRACO was later deferred; the ResearchRubrics draw is unchanged. The two
+main questions are a seeded stratified subset of 15 of those 20. The two
 smoke questions are the first two of the four ResearchRubrics development questions from the same
 draw, ordered by sha256(seed + task_id). This script re-runs that procedure and compares.
 
@@ -53,7 +54,16 @@ for ds in sorted(tasks):
             for d in order:
                 if picked < quota and pool[d]:
                     out[split].append(pool[d].pop(0)); picked += 1
-main = sorted(t for t in out["main"] if t.startswith("rr-"))
+main20 = sorted(t for t in out["main"] if t.startswith("rr-"))
+# Round-1 main set: a seeded stratified subset of those 20. Every domain keeps one question; five domains
+# chosen by a seeded shuffle keep both. Drawn before any main output existed.
+dom = dict(tasks["researchrubrics"])
+by = {}
+for tid in sorted(main20, key=lambda x: h(SEED + x)):
+    by.setdefault(dom[tid], []).append(tid)
+doms = sorted(by)
+random.Random(SEED + ":main15").shuffle(doms)
+main = sorted(t for i, d in enumerate(doms) for t in (by[d] if i < 5 else by[d][:1]))
 smoke = sorted(sorted((t for t in out["dev"] if t.startswith("rr-")), key=lambda t: h(SEED + t))[:2])
 frozen = json.loads((ROOT / "configs" / "splits.json").read_text())["splits"]
 ok = main == frozen["main"] and smoke == frozen["smoke"]
