@@ -41,3 +41,25 @@ Breadth 3, depth 2 and concurrency 4 are the shipped defaults and are kept.
 - C reads 5 pages per query by design; D reads 1; B decides for itself.
 - C and D make uncached calls; B uses prompt caching. Under a dollar cap this changes how much research each can afford, and it is a property of the system as it stands.
 - D edits its message history when it summarises. C runs many independent short calls.
+
+## E. Hyperresearch (modified configuration, Claude Code runtime)
+
+| | |
+|---|---|
+| Source | github.com/jordan-gibbs/hyperresearch at `f06271f09af3a63229b6487b606ba3142114fe94` (v0.13.0, MIT), plus `adapters/patches/hyperresearch-gateway.patch` |
+| Runtime | Claude Code CLI 2.1.321, headless (`claude -p "/hyperresearch <question>"`), Python 3.12 |
+| Strategy | A router skill runs a staged pipeline. It classifies each question as `light` (5 steps: decompose, source sweep, single draft, polish, readability) or `full` (16 steps, adding contradiction and loci analysis, depth investigation, three drafts, synthesis, four critics, gap fetch, patching, citation check). 16 sub-agent definitions. |
+| Model roles | 13 profile roles across 16 agents, shipped as `sonnet` and `opus`. All set to Fable 5.2. |
+| Human checkpoints | Only in its browser lane, which is switched off. |
+
+Adaptations:
+1. **Models.** Every role in the profile's model map is set to `claude-fable-5-2` and the agents are re-rendered; the driver refuses to start unless all 16 agent files carry that model. The session model and Claude Code's model aliases are set to the same id, and the gateway refuses anything else.
+2. **Search.** Upstream relies on Claude Code's built-in WebSearch, which runs on the provider's servers and cannot be shared with the other arms. WebSearch and WebFetch are denied. The patch adds a `hyperresearch websearch` command, and one short note appended to every agent and skill says to use it.
+3. **Page reading.** The patch adds a web provider that sends `hyperresearch fetch` and `websearch` to the study gateway, so E uses the same Exa search, page reader, content limit, block list and budget as B, C and D. Upstream's default reader is a local headless browser.
+4. **No direct network.** The session runs in a macOS sandbox that permits network access to the local gateway only. Upstream's academic-API, PDF-download and open-access-rescue lanes therefore fail and fall back to search and fetch. This narrows its sourcing and is the price of equal research access.
+5. **Isolation.** Fresh working directory, home and Claude Code configuration directory per run. The sandbox also denies reading the operator's own Claude Code and Codex folders and the study workspace, so no personal skills, agents, memory or study files can load. The driver checks the session's start-up record and fails the run if any personal skill, agent or MCP server appears. Claude Code's bundled `deep-research` skill is denied.
+6. **Budget note.** The appended note also tells agents to go straight to the final report when the research budget is reported as used.
+7. Effort is set by the gateway (Claude Code asked for `medium`; the study pins `high`), and `max_tokens` is lowered by the gateway when the remaining budget is smaller than the 128,000 Claude Code requests.
+8. The report is the pipeline's own deliverable, `research/notes/final_report_<tag>.md`, with the vault's front matter removed. Drafts and notes are not promoted to a report.
+
+Tier choice (`light` or `full`) is left to the pipeline, as upstream.

@@ -1,6 +1,6 @@
 # Protocol, round 1
 
-One model, four configurations, twenty public questions. This file, `configs/study.toml` and `configs/splits.json` are frozen together at a tagged commit before any main output exists. Later changes are recorded in `amendments/`.
+One model, five configurations, fifteen public questions. This file, `configs/study.toml` and `configs/splits.json` are frozen together at a tagged commit before any main output exists. Later changes are recorded in `amendments/`.
 
 ## 1. Questions
 
@@ -18,23 +18,24 @@ Using Claude Fable 5.2 (`claude-fable-5-2`) in every contestant system:
 | B | Plain tools | A single-agent loop written in this repository over the Messages API, with two tools: `search` and `fetch`. No sub-agents, no research skill, no critic. |
 | C | GPT Researcher | Its recursive "deep" mode at a pinned commit, every model role set to Fable 5.2. |
 | D | Deep Agents | LangChain's `deep_research` example at a pinned commit, on Fable 5.2. |
+| E | Hyperresearch | The Claude Code research pipeline at a pinned commit, every agent role set to Fable 5.2. |
 
 Every outcome-affecting generative call is `claude-fable-5-2` at effort `high`: planners, researchers, summarisers, writers, critics. A local gateway sits between every contestant and the model. It refuses any other model, any request for server-side fallback, and any server-side web tool, and it logs the model and effort that actually served each call. Where a harness cannot set effort itself, the gateway sets it and records that on the call.
 
-B, C and D share one research backend through the same gateway: Exa search (`type: auto`, up to 5 results, a 500-character raw-text snippet per result) and Exa Contents raw page text, cut at 30,000 characters with a visible marker. Exa highlights, summaries and answers are model-generated and are never requested. There is no fallback backend. URLs naming the benchmark are filtered out.
+B, C, D and E share one research backend through the same gateway: Exa search (`type: auto`, up to 5 results, a 500-character raw-text snippet per result) and Exa Contents raw page text, cut at 30,000 characters with a visible marker. Exa highlights, summaries and answers are model-generated and are never requested. There is no fallback backend. URLs naming the benchmark are filtered out.
 
-Each harness keeps its own research strategy. The adaptations needed to run it under these controls are listed in `docs/COHORT.md`, and C and D are reported as modified configurations.
+Each harness keeps its own research strategy. The adaptations needed to run it under these controls are listed in `docs/COHORT.md`, and C, D and E are reported as modified configurations. E also runs inside the Claude Code runtime, with that runtime's system prompt, built-in file and shell tools and context handling; that is a runtime difference, not orchestration.
 
-What the comparisons mean: B minus A is the benefit of ordinary tool-assisted research at this budget. C minus B and D minus B are the additional benefit of each harness as configured here, with model, effort, research access and budget held equal. Prompts, loop structure, runtime and context handling differ between arms, so these are not pure orchestration effects.
+What the comparisons mean: B minus A is the benefit of ordinary tool-assisted research at this budget. C minus B, D minus B and E minus B are the additional benefit of each harness as configured here, with model, effort, research access and budget held equal. Prompts, loop structure, runtime and context handling differ between arms, so these are not pure orchestration effects.
 
 ## 3. Tasks
 
 ResearchRubrics, `ScaleAI/researchrubrics` at revision `85de3115053d1453ed612caacf4a405edc1ad756` (MIT), file hash pinned in the config. 101 questions with weighted rubric criteria and no reference answers.
 
-- **Main: exactly 20 questions, one run per configuration, 80 scored outputs.** Two questions from each of the dataset's ten domains, drawn by a seeded sampler before any contestant output existed. 508 rubric criteria in total.
-- **Smoke: 2 further questions, 8 outputs, unscored.** They check integrations, output extraction, grading and cost. They establish operational feasibility only. They say nothing about statistical power, grading accuracy or task coverage.
-- 22 distinct questions and 88 outputs before any retry. Smoke and main are disjoint. Task ids are in `configs/splits.json`, and `scripts/reproduce_selection.py` re-derives them from the seed.
-- Questions are used verbatim. No date is changed. Seven main questions contain time-sensitive wording. A tool-using system may find facts newer than the rubric expects; this is reported, not corrected.
+- **Main: 15 questions, one run per configuration, 75 scored outputs.** A seeded sampler first drew two questions from each of the dataset's ten domains. The main set is a seeded stratified subset of those 20: every domain keeps one question and five domains keep both. Both draws were made before any main output existed. 399 rubric criteria in total.
+- **Smoke: 2 further questions, 10 outputs, unscored.** They check integrations, output extraction, grading and cost. They establish operational feasibility only. They say nothing about statistical power, grading accuracy or task coverage.
+- 17 distinct questions and 85 outputs before any retry. Smoke and main are disjoint. Task ids are in `configs/splits.json`, and `scripts/reproduce_selection.py` re-derives them from the seed.
+- Questions are used verbatim. No date is changed. Several main questions contain time-sensitive wording; they are flagged in the task strata. A tool-using system may find facts newer than the rubric expects; this is reported, not corrected.
 - No question is removed because the closed-book model answers it well. The exclusion list is empty.
 - The dataset was public before the model's training cutoff. A high closed-book score does not show the model saw the rubric, and a low one does not show it did not.
 
@@ -43,9 +44,9 @@ ResearchRubrics, `ScaleAI/researchrubrics` at revision `85de3115053d1453ed612caa
 | | Cap per run |
 |---|---|
 | Closed-book | $1.00 of model tokens at list price. Output allowance 20,000 tokens. |
-| Research run (B, C, D) | $4.00 of model tokens, covering every call and sub-agent. Research tools stop at $3.00 so $1.00 remains for the report. Also 150 research calls, $0.60 of Exa spend, 60 minutes. |
+| Research run (B, C, D, E) | $4.00 of model tokens, covering every call and sub-agent. Research tools stop at $3.00 so $1.00 remains for the report. Also 150 research calls, $0.60 of Exa spend, 60 minutes. |
 
-Total model funding for the round is $310: main 20 × ($1 + 3 × $4) = $260, smoke 2 × $13 = $26, and $24 for paid preflight, retries and contingency. These are affordability limits, not measured costs.
+Total model funding for the round is $310: main 15 × ($1 + 4 × $4) = $255, smoke 2 × $17 = $34, and $21 for paid preflight, retries and contingency. These are affordability limits, not measured costs.
 
 Enforcement, in two layers:
 
@@ -95,18 +96,19 @@ Whether Astra judges a report's criteria together or one at a time is decided on
 - **Fixed public check.** RuVerBench provides human yes/no labels for sampled ResearchRubrics criteria on reports written by other systems. From records whose question is not in this study, a seeded draw fixes a development set of 10 reports (31 labelled points) and a held-out set of 30 reports (97 points). Prompts, the batching choice and any confidence threshold are settled on development material only. The held-out set is scored once. Reported per judge: false passes, false failures, unresolved, balanced accuracy, and the same where both judges agree.
 - **Batching check.** Astra judges the development set both ways, and two smoke reports both ways. Batching is kept only if the two modes agree on at least 90% of the smoke items and batching is not more than 5 points worse in balanced accuracy on the development set.
 - **Diagnostics.** Fifteen hand-written cases with known answers: paraphrase, padding, wrong number, omitted qualification, instructions addressed to the grader, and error criteria.
-- **Manual review.** A blinded queue of at most 60 items from the main outputs: up to 40 unresolved judgments, heavy and error criteria first, and 20 randomly chosen agreements. Reviewed labels replace the range for those items. Everything else stays unresolved.
+- **Manual review.** A blinded queue of at most 60 items from the main outputs (of roughly 2,000 judgments): up to 40 unresolved judgments, heavy and error criteria first, and 20 randomly chosen agreements. Reviewed labels replace the range for those items. Everything else stays unresolved.
 
 Limits. One hundred held-out points give wide intervals. The human labels are on other systems' reports, not Fable's. Agreement between two judges is not correctness; the random agreements in the review queue give the only direct estimate of that on these outputs. Jev's probabilities describe single judgments: they are not a measure of how stable a verdict is under repetition and are not correctness rates. Re-judging stability is not measured in this round.
 
 ## 9. Analysis
 
-- Three prespecified paired comparisons: B minus A, C minus B, D minus B.
-- The unit is the question. For each comparison: the mean of the 20 paired differences, a 95% percentile bootstrap interval over questions (10,000 draws, fixed seed), wins, losses and ties, and a paired sign-flip permutation p-value with a Holm adjustment across the three comparisons.
+- Four prespecified paired comparisons: B minus A, C minus B, D minus B, E minus B.
+- The unit is the question. For each comparison: the mean of the 15 paired differences, a 95% percentile bootstrap interval over questions (10,000 draws, fixed seed), wins, losses and ties, and a paired sign-flip permutation p-value with a Holm adjustment across the four comparisons.
 - Each comparison is shown under Jev alone, Astra alone, and the mean of the two. Unresolved judgments are handled by bounding each score, and the difference is bounded by pairing opposite ends: from (first system's lower bound minus baseline's upper bound) to (first system's upper bound minus baseline's lower bound).
 - A direction is called supported only if the interval excludes zero with the same sign under each judge alone and under the unfavourable end of that bound. Otherwise the estimate and interval are reported without a directional claim. No claim of equivalence is made.
 - There is one run per configuration and question, so variation between repeated runs of the same configuration is not estimated, and differences on a single question are not interpreted.
-- Twenty questions from one dataset do not support a general ranking of harnesses.
+- Fifteen questions is a small sample. Intervals will be wide: only a large and consistent difference can be distinguished from zero, and a difference that is not distinguished from zero is not evidence that two systems are equal. With 15 pairs the smallest attainable sign-flip p-value is about 0.00006, but a typical moderate effect will not reach conventional thresholds after adjusting for four comparisons. Results are reported as estimates with intervals and per-question tables first, and directional claims only where the rule above is met.
+- Fifteen questions from one dataset do not support a general ranking of harnesses, and domain-level breakdowns (one or two questions per domain) are descriptive only.
 - Also reported per configuration: runs scheduled, runs with a report, status counts, cost, tokens, model calls, research calls, Exa spend, wall time and report length, plus a table with every question's score and status.
 
 `results.json` is built from the attempt logs and `RESULTS.md` is rendered from it. `python -m hb verify` rebuilds both and fails on any difference, so every reported number comes from the same versioned artifact.

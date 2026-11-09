@@ -1,0 +1,15 @@
+diff --git a/gpt_researcher/llm_provider/generic/base.py b/gpt_researcher/llm_provider/generic/base.py
+index b0ab77ee..e442a28b 100644
+--- a/gpt_researcher/llm_provider/generic/base.py
++++ b/gpt_researcher/llm_provider/generic/base.py
+@@ -429,7 +429,9 @@ class GenericLLMProvider:
+             )
+         instance = cls(llm, chat_log, verbose=verbose, llm_timeout=llm_timeout)
+         # Adaptive thinking yields Anthropic content blocks; research consumes text.
+-        instance._text_only = provider == "minimax_anthropic"
++        # harness-bench adapter: a model that always thinks returns content as a list of blocks; use the text view,
++        # as upstream already does for its other Anthropic-compatible provider.
++        instance._text_only = provider in ("minimax_anthropic", "anthropic")
+         return instance
+ 
+     async def _await_llm_response(self, awaitable, *, streaming: bool = False):

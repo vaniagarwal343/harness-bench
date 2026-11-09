@@ -175,8 +175,8 @@ def funding(cfg: dict) -> int:
         print("  key: MISSING")
     else:
         r = httpx.get("https://api.typesafe.ai/v1/models", headers={"Authorization": f"Bearer {k}"}, timeout=30)
-        pinned = cfg["judges"]["jev"]["model"] in r.text
-        print(f"  key valid: {r.status_code == 200} (HTTP {r.status_code}); pinned {cfg['judges']['jev']['model']} listed: {pinned}")
+        print(f"  key valid: {r.status_code == 200} (HTTP {r.status_code}). The list endpoint shows aliases only; that the pinned "
+              f"{cfg['judges']['jev']['model']} answers is confirmed by `preflight --paid` and checked on every judgment.")
     print(f"  balance: read it in the TypeSafe console. Ledger limit in force: ${cf.get('jev', 0):.2f}")
     print("Exa:")
     print(f"  key: {'set' if secret('EXA_API_KEY') else 'MISSING'} (no free validity or balance endpoint; balance needs a team service key)")
