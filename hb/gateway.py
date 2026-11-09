@@ -277,6 +277,12 @@ class Gateway:
             rec.update(status=status, latency_s=round(now() - rec["ts"], 3), response_model=(resp or {}).get("model"),
                        stop_reason=(resp or {}).get("stop_reason"), usage=usage, error=err, reserved_usd=round(reserve[0], 6),
                        request_id=(resp or {}).get("_request_id"))
+            if not usage and status == 599 and rec.get("dispatched"):
+                # The request reached the provider but its usage never came back (dropped or unreadable stream).
+                # It may have been billed, so the whole reservation is counted as spent.
+                with led.lock:
+                    led.cost_usd += reserve[0]
+                rec["cost_usd"], rec["cost_basis"] = round(reserve[0], 6), "full_reservation_usage_unknown"
             if usage:  # billed whenever the provider reports usage, including interrupted streams
                 rec["cost_usd"] = round(led.add_usage(usage), 6)
                 if rec["cost_usd"] > reserve[0] + 1e-6 and led.policy.get("budget", {}).get("max_cost_usd") is not None:
@@ -326,11 +332,13 @@ class Gateway:
                 return Response(sse_bytes(resp), media_type="text/event-stream")
             return JSONResponse(resp)
 
-        headers = {"x-api-key": self.anthropic_key or "", "content-type": "application/json",
+        # identity: the stream is relayed byte for byte and parsed for usage, so it must not be compressed
+        headers = {"x-api-key": self.anthropic_key or "", "content-type": "application/json", "accept-encoding": "identity",
                    "anthropic-version": request.headers.get("anthropic-version", "2023-06-01")}
         if betas:
             headers["anthropic-beta"] = betas
         timeout = httpx.Timeout(self.cfg["execution"]["llm_request_timeout_s"], connect=30)
+        rec["dispatched"] = True
         if not body.get("stream"):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as c:
@@ -368,7 +376,7 @@ class Gateway:
         async def relay():
             buf = bytearray()
             try:
-                async for chunk in up.aiter_raw():
+                async for chunk in up.aiter_bytes():
                     buf.extend(chunk)
                     yield chunk
                 resp = parse_sse(bytes(buf))
