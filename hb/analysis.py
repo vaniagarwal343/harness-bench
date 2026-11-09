@@ -92,7 +92,8 @@ def build_results(cfg: dict, cdir: Path, tasks: dict) -> dict:
                                         else (scores["jev"][k] + scores["astra"][k]) / 2) for k in METRICS}
         rv = list(rows.values())
         runs.append(dict(run_id=m["run_id"], task_id=m["task_id"], dataset=task["dataset"], system=m["system"],
-                         block=sched["block"], status=m["status"], attempts=m["attempts"], scores=scores,
+                         block=sched["block"], status=m["status"], interrupted=m.get("interrupted"), attempts=m["attempts"], scores=scores,
+                         earlier_failed_attempts_cost_usd=m.get("earlier_failed_attempts_cost_usd", 0.0),
                          report_chars=m.get("report_chars", 0), cost_usd=m["ledger"]["cost_usd"], tool_cost_usd=m["ledger"]["tool_cost_usd"],
                          usage=m["ledger"]["usage"], tool_calls=m["ledger"]["tool_calls"], llm_calls=m["ledger"]["llm_calls"],
                          wall_s=m.get("wall_s"), violations=len(m["ledger"]["violations"]), models_seen=m["ledger"]["models_seen"],
@@ -182,13 +183,19 @@ def summarize(cfg: dict, runs: list[dict]) -> dict:
 
         ran = [r for r in rs if r["status"] != "not_run"]
         table[s] = dict(
-            scheduled=len(rs), with_report=sum(r["status"] in ("completed", "partial") for r in rs),
+            scheduled=len(rs), with_report=sum(r.get("report_chars", 0) > 0 for r in rs),
+            completed=sum(r["status"] == "completed" for r in rs),
+            interrupted=[dict(task_id=r["task_id"], why=r["interrupted"]) for r in rs if r.get("interrupted")],
             status_counts={st: sum(r["status"] == st for r in rs) for st in sorted({r["status"] for r in rs})},
             total={v: mean(v, "total") for v in (*VIEWS, "two_judge_mean")},
             adapted={m: {v: mean(v, m) for v in ("jev", "astra", "two_judge_mean")} for m in METRICS[1:]},
             errors_present_mean={v: mean(v, "errors_present") for v in ("jev", "astra")},
             grading={k: sum(r["grading"][k] for r in ran) for k in ("expected", "disagree", "unresolved_error", "cannot_judge", "adjudicated")},
             cost_usd_total=round(sum(r["cost_usd"] for r in ran), 4), cost_usd_max=max((r["cost_usd"] for r in ran), default=None),
+            cost_usd_median=float(np.median([r["cost_usd"] for r in ran])) if ran else None,
+            wall_s_median=float(np.median([r["wall_s"] or 0 for r in ran])) if ran else None,
+            wall_s_max=max((r["wall_s"] or 0 for r in ran), default=None),
+            infrastructure_retry_cost_usd=round(sum(r.get("earlier_failed_attempts_cost_usd", 0.0) for r in ran), 4),
             exa_usd_total=round(sum(r["tool_cost_usd"] for r in ran), 4),
             means={k: (float(np.mean([f(r) for r in ran])) if ran else None) for k, f in (
                 ("cost_usd", lambda r: r["cost_usd"]), ("llm_calls", lambda r: r["llm_calls"]),
@@ -231,7 +238,9 @@ def summarize(cfg: dict, runs: list[dict]) -> dict:
         c["p_holm"] = adj[f"{c['system']}-{c['baseline']}"]
     per_task = [dict(task_id=t, **{s: dict(status=(by.get((t, s)) or {}).get("status", "not_scheduled"),
                                            jev=val(t, s, "jev", "total"), astra=val(t, s, "astra", "total"),
-                                           cost_usd=(by.get((t, s)) or {}).get("cost_usd")) for s in systems}) for t in tasks]
+                                           two_judge=val(t, s, "two_judge_mean", "total"),
+                                           cost_usd=(by.get((t, s)) or {}).get("cost_usd"), exa_usd=(by.get((t, s)) or {}).get("tool_cost_usd"),
+                                           wall_s=(by.get((t, s)) or {}).get("wall_s")) for s in systems}) for t in tasks]
     return dict(systems=table, comparisons=comps, per_task=per_task, n_tasks=len(tasks))
 
 
@@ -254,11 +263,11 @@ def render_markdown(res: dict) -> str:
          "Scores are ResearchRubrics rubric compliance (unclipped; 1.0 = all positive weight met), judged from the report text. "
          "They are not independently verified factual accuracy, and citation criteria check presence, not source support.", "",
          "## Systems", "",
-         "| system | scheduled | with report | statuses | total: Jev | total: Astra | two-judge mean | consensus bounds | no-citation criteria (Jev / Astra) | citation-dependent (Jev / Astra) | unresolved / expected | $ total | $ max run | Exa $ |",
-         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+         "| system | scheduled | completed | with report | statuses | total: Jev | total: Astra | two-judge mean | consensus bounds | no-citation criteria (Jev / Astra) | citation-dependent (Jev / Astra) | unresolved / expected | $ total | $ max run | Exa $ |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, t in s["systems"].items():
         g, ad = t["grading"], t["adapted"]
-        L.append(f"| {name} | {t['scheduled']} | {t['with_report']} | {t['status_counts']} | {_f(t['total']['jev'])} | {_f(t['total']['astra'])} | "
+        L.append(f"| {name} | {t['scheduled']} | {t['completed']} | {t['with_report']} | {t['status_counts']} | {_f(t['total']['jev'])} | {_f(t['total']['astra'])} | "
                  f"{_f(t['total']['two_judge_mean'])} | {_f(t['total']['consensus_lo'])} to {_f(t['total']['consensus_hi'])} | "
                  f"{_f(ad['adapted_no_citation']['jev'])} / {_f(ad['adapted_no_citation']['astra'])} | "
                  f"{_f(ad['adapted_citation_dependent']['jev'])} / {_f(ad['adapted_citation_dependent']['astra'])} | "
@@ -272,16 +281,24 @@ def render_markdown(res: dict) -> str:
             wl = f"{tj.get('wins')}/{tj.get('losses')}/{tj.get('ties')}" if tj.get("lo") is not None else "n/a"
             L.append(f"| {c['system']} minus {c['baseline']} | {metric} | {_ci(tj)} | {_ci(m['jev'])} | {_ci(m['astra'])} | {_ci(m['bound_lo'])} | {_ci(m['bound_hi'])} | "
                      f"{wl} | {_f(m['p_sign_flip'])} | {_f(c['p_holm']) if metric == 'total' else ''} | {c['direction_supported'] if metric == 'total' else ''} |")
-    L += ["", "## Usage per run (means)", "", "| system | $ | model calls | research calls | minutes | report chars | output tokens | input tokens (all kinds) | retries | policy violations |",
-          "|---|---|---|---|---|---|---|---|---|---|"]
+    L += ["", "## Usage per run", "", "| system | mean $ | median $ | max $ | median minutes | max minutes | model calls | research calls | minutes (mean) | report chars | output tokens | input tokens (all kinds) | infrastructure retries | policy violations |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, t in s["systems"].items():
         m = t["means"]
-        L.append(f"| {name} | {_f(m['cost_usd'], 2)} | {_f(m['llm_calls'], 1)} | {_f(m['tool_calls'], 1)} | {_f((m['wall_s'] or 0) / 60, 1)} | "
+        L.append(f"| {name} | {_f(m['cost_usd'], 2)} | {_f(t['cost_usd_median'], 2)} | {_f(t['cost_usd_max'], 2)} | {_f((t['wall_s_median'] or 0) / 60, 1)} | {_f((t['wall_s_max'] or 0) / 60, 1)} | {_f(m['llm_calls'], 1)} | {_f(m['tool_calls'], 1)} | {_f((m['wall_s'] or 0) / 60, 1)} | "
                  f"{_f(m['report_chars'], 0)} | {_f(m['output_tokens'], 0)} | {_f(m['input_tokens_all'], 0)} | {t['retries']} | {t['policy_violations']} |")
     sysn = list(s["systems"])
-    L += ["", "## Every task (total score: Jev / Astra, and status)", "", "| task | " + " | ".join(sysn) + " |", "|---|" + "---|" * len(sysn)]
+    L += ["", "## Every question and configuration", "", "Each cell: rubric score Jev / Astra; generation cost (model + retrieval); elapsed minutes; status.", "",
+          "| task | " + " | ".join(sysn) + " |", "|---|" + "---|" * len(sysn)]
     for row in s["per_task"]:
-        L.append(f"| {row['task_id']} | " + " | ".join(f"{_f(row[n]['jev'], 2)} / {_f(row[n]['astra'], 2)} ({row[n]['status']})" for n in sysn) + " |")
+        L.append(f"| {row['task_id']} | " + " | ".join(
+            f"{_f(row[n]['jev'], 2)} / {_f(row[n]['astra'], 2)}; ${_f((row[n]['cost_usd'] or 0) + (row[n]['exa_usd'] or 0), 2)}; "
+            f"{_f((row[n]['wall_s'] or 0) / 60, 1)} min; {row[n]['status']}" for n in sysn) + " |")
+    intr = [(n, i) for n, t in s["systems"].items() for i in t["interrupted"]]
+    L += ["", "## Runs that did not finish on their own", ""] + ([f"- {n} on {i['task_id']}: {i['why']}" for n, i in intr] or ["- none"])
+    L += ["", "## Costs kept apart from run costs", "",
+          "- Infrastructure retries (earlier failed attempts of a run): $" + _f(sum(t["infrastructure_retry_cost_usd"] for t in s["systems"].values()), 2),
+          "- Grading: see the grading account below. Debugging before the campaign is in the spending ledger under its own category."]
     g = res["grading"]
     L += ["", "## Grading account", "",
           f"- Jev: {g['jev']['attempts']} attempts, {g['jev']['ok']} verdicts, ${g['jev']['cost_usd']}, long-context judgments {g['jev']['long_context_judgments']}, error attempts {g['jev']['error_states'] or 'none'}",

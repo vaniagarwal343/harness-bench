@@ -27,7 +27,7 @@ def client(gw, led):
 
 
 def policy(**kw):
-    return dict(model=MODEL, effort="high", allow_tools=True, budget={}, shims=[]) | kw
+    return dict(model=MODEL, effort="high", allow_tools=True, safeguards={}, shims=[]) | kw
 
 
 # ---------------------------------------------------------------- model and tool policy
@@ -64,49 +64,76 @@ def test_effort_is_pinned_and_logged_when_a_harness_cannot_set_it(gw, tmp_path):
     assert rec["shims"] == ["pin_effort"] and rec["effective_effort"] == "high" and led.efforts_seen == {"high": 1}
 
 
-# ---------------------------------------------------------------- money is reserved before dispatch
+# ---------------------------------------------------------------- no per-run caps; one cumulative ceiling; safeguards
 
-def test_a_call_that_cannot_be_afforded_is_refused_before_it_is_sent(gw, tmp_path):
-    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.01)))  # $0.01 cannot pay for 1024 output tokens at $40/M
-    with pytest.raises(anthropic.BadRequestError, match="HB_BUDGET_EXHAUSTED"):
-        client(gw, led).messages.create(model=MODEL, max_tokens=4000, messages=MSG)
-    assert led.cost_usd == 0 and led.models_seen == {} and led.budget_refusals == 1  # nothing reached the model
-
-
-def test_output_allowance_is_lowered_to_what_the_remaining_budget_can_pay(gw, tmp_path):
-    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.10)))
-    client(gw, led).messages.create(model=MODEL, max_tokens=20000, messages=MSG)  # 20000 tokens would be $0.80
-    rec = [r for r in read_jsonl(tmp_path / "trace.jsonl") if r["type"] == "llm"][0]
-    assert "clamp_max_tokens" in rec["shims"] and rec["effective_max_tokens"] < 2500
-    assert rec["cost_usd"] <= rec["reserved_usd"] <= 0.10
+def _gw_with_funding(tmp_path, monkeypatch, confirmed):
+    monkeypatch.setattr(budget, "ROOT", tmp_path)
+    cfg = dict(CFG, confirmed_funding=dict(CFG["confirmed_funding"], anthropic=confirmed, exa=1.0))
+    return Gateway(cfg, None, None, mock=True).start(), cfg
 
 
-def test_concurrent_subagent_calls_never_commit_more_than_the_cap(gw, tmp_path):
-    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.20)))
-
-    async def burst():
-        async with httpx.AsyncClient(base_url=gw.url, headers={"x-api-key": led.token}, timeout=60) as c:
-            return await asyncio.gather(*[c.post("/v1/messages", json=dict(model=MODEL, max_tokens=3000, messages=MSG)) for _ in range(12)])
-    codes = [r.status_code for r in asyncio.run(burst())]
-    assert codes.count(200) >= 1
-    assert led.max_committed_usd <= 0.20 + 1e-9 and led.reserved_usd < 1e-9 and led.inflight == 0
+def test_a_run_is_not_capped_and_output_allowance_is_never_reduced(gw, tmp_path):
+    led = gw.open_run(tmp_path, policy())
+    for _ in range(5):
+        client(gw, led).messages.create(model=MODEL, max_tokens=20000, messages=MSG)
+    recs = [r for r in read_jsonl(tmp_path / "trace.jsonl") if r["type"] == "llm"]
+    assert all(r["status"] == 200 and r["effective_max_tokens"] == 20000 and r["shims"] == [] for r in recs)
+    assert led.interrupted is None
 
 
-def test_research_tools_close_early_so_the_report_can_still_be_written(gw, tmp_path):
-    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=4.0, final_reserve_usd=1.0)))
+def test_the_cumulative_ceiling_refuses_before_dispatch_and_labels_the_run(tmp_path, monkeypatch):
+    g, cfg = _gw_with_funding(tmp_path, monkeypatch, confirmed=0.50)  # 20000 output tokens could cost $0.80
+    try:
+        led = g.open_run(tmp_path / "r", policy(), category="main", key="k1")
+        with pytest.raises(anthropic.BadRequestError, match="HB_FUNDING_LIMIT"):
+            client(g, led).messages.create(model=MODEL, max_tokens=20000, messages=MSG)
+        assert led.interrupted == "funding_limit" and led.cost_usd == 0 and led.models_seen == {}
+        led2 = g.open_run(tmp_path / "r2", policy(), category="main", key="k2")
+        client(g, led2).messages.create(model=MODEL, max_tokens=2000, messages=MSG)  # an affordable call still goes through
+        st = budget.Budget("anthropic", cfg, mock=True).status()
+        assert 0 < st["committed"] < 0.50 and st["by_category"].keys() == {"main"}  # every metered call is in the persistent ledger
+    finally:
+        g.stop()
+
+
+def test_concurrent_calls_cannot_jointly_pass_the_ceiling(tmp_path, monkeypatch):
+    g, cfg = _gw_with_funding(tmp_path, monkeypatch, confirmed=0.30)
+    cfg["funding"] = dict(cfg["funding"], enforcement=dict(cfg["funding"]["enforcement"], reservation_wait_s=5))
+    try:
+        led = g.open_run(tmp_path / "r", policy())
+
+        async def burst():
+            async with httpx.AsyncClient(base_url=g.url, headers={"x-api-key": led.token}, timeout=60) as c:
+                return await asyncio.gather(*[c.post("/v1/messages", json=dict(model=MODEL, max_tokens=3000, messages=MSG)) for _ in range(12)])
+        codes = [r.status_code for r in asyncio.run(burst())]
+        assert codes.count(200) >= 1
+        assert budget.Budget("anthropic", cfg, mock=True).committed() <= 0.30 and g.funds["anthropic"].reserved < 1e-9
+    finally:
+        g.stop()
+
+
+def test_safeguards_stop_a_runaway_loop_and_label_it(gw, tmp_path):
+    led = gw.open_run(tmp_path, policy(safeguards=dict(max_llm_calls=3, max_consecutive_llm_errors=30)))
+    c = client(gw, led)
+    for _ in range(3):
+        c.messages.create(model=MODEL, max_tokens=100, messages=MSG)
+    with pytest.raises(anthropic.BadRequestError, match="HB_SAFEGUARD"):
+        c.messages.create(model=MODEL, max_tokens=100, messages=MSG)
+    assert led.interrupted == "safeguard:llm_calls"
+    led2 = gw.open_run(tmp_path / "b", policy(safeguards=dict(max_consecutive_llm_errors=2)))
+    for _ in range(2):
+        with pytest.raises(anthropic.BadRequestError):
+            client(gw, led2).messages.create(model="claude-opus-5-5", max_tokens=100, messages=MSG)
+    with pytest.raises(anthropic.BadRequestError, match="HB_SAFEGUARD"):
+        client(gw, led2).messages.create(model=MODEL, max_tokens=100, messages=MSG)
+    assert led2.interrupted == "safeguard:consecutive_errors"
+
+
+def test_research_calls_are_not_capped_and_are_metered(gw, tmp_path):
+    led = gw.open_run(tmp_path, policy())
     h = {"x-api-key": led.token}
-    assert "results" in httpx.post(gw.url + "/tools/search", headers=h, json={"query": "x"}).json()
-    led.cost_usd = 3.01  # past the research share of the budget
-    assert "HB_RESEARCH_BUDGET_USED" in httpx.post(gw.url + "/tools/search", headers=h, json={"query": "x"}).json()["error"]
-    client(gw, led).messages.create(model=MODEL, max_tokens=8000, messages=MSG)  # the model can still write
-
-
-def test_search_spend_is_capped_per_run_and_metered(gw, tmp_path):
-    led = gw.open_run(tmp_path, policy(budget=dict(max_tool_cost_usd=0.03)))
-    h = {"x-api-key": led.token}
-    outs = [httpx.post(gw.url + "/tools/search", headers=h, json={"query": "x"}).json() for _ in range(4)]
-    assert sum("results" in o for o in outs) == 2 and "HB_RESEARCH_BUDGET_USED" in outs[-1]["error"]
-    assert 0 < led.tool_cost_usd <= 0.03 and led.tool_calls["search"] == 4  # refused attempts are still counted
+    outs = [httpx.post(gw.url + "/tools/search", headers=h, json={"query": "x"}).json() for _ in range(40)]
+    assert all("results" in o and "notice" not in o for o in outs) and led.tool_cost_usd > 0.4 and led.interrupted is None
 
 
 def test_benchmark_sources_are_filtered_and_a_closed_token_is_dead(gw, tmp_path):
@@ -119,44 +146,27 @@ def test_benchmark_sources_are_filtered_and_a_closed_token_is_dead(gw, tmp_path)
     assert httpx.post(gw.url + "/tools/search", headers=h, json={"query": "x"}).status_code == 401
 
 
-# ---------------------------------------------------------------- persistent campaign budget
-
-def _budget(tmp_path, monkeypatch, confirmed=210.0):
+def test_ledger_persists_keeps_categories_and_counts_earlier_entries(tmp_path, monkeypatch):
     monkeypatch.setattr(budget, "ROOT", tmp_path)
-    cfg = dict(CFG, confirmed_funding=dict(CFG["confirmed_funding"], anthropic=confirmed))
-    return budget.Budget("anthropic", cfg), cfg
+    b = budget.Budget("anthropic", CFG)
+    (tmp_path / "budget").mkdir()
+    (tmp_path / "budget" / "anthropic.jsonl").write_text(
+        '{"op":"reserve","pool":"smoke","key":"old1","amount":4.0}\n{"op":"reconcile","key":"old1","actual":3.5}\n')
+    b.spend("main", "run1", 2.25); b.spend("infrastructure_bug", "x", 1.0)
+    st = budget.Budget("anthropic", CFG).status()  # a new process sees the same state
+    assert st["committed"] == 6.75 and st["by_category"] == {"infrastructure_bug": 1.0, "main": 2.25, "smoke": 3.5}
+    assert st["remaining_vs_ceiling"] == 310 - 6.75
 
 
-def test_pools_do_not_borrow_and_confirmed_funding_is_a_hard_limit(tmp_path, monkeypatch):
-    b, cfg = _budget(tmp_path, monkeypatch)
-    for i in range(5):
-        b.reserve("buffer", f"retry{i}", 4.0)  # 5 x $4 = $20 of the $21 buffer
-    with pytest.raises(budget.BudgetRefused, match="buffer"):
-        b.reserve("buffer", "retry7", 4.0)  # debugging cannot dip into the main allocation
-    for i in range(47):
-        b.reserve("main", f"m{i}", 4.0)  # 20 + 188 = 208 committed
-    with pytest.raises(budget.BudgetRefused, match="confirmed funding"):
-        b.reserve("main", "m47", 4.0)  # would pass $210 that is actually in the account
-    b.reconcile("m0", 1.25)  # actual use frees the difference
-    b.reserve("main", "m47", 4.0)
-    again = budget.Budget("anthropic", cfg)  # a new process sees the same state
-    st = again.status()
-    assert abs(st["committed"] - (20 + 46 * 4 + 1.25 + 4)) < 1e-6 and len(st["open"]) == 5 + 47 and not st["over_reservation"]
-
-
-def test_no_confirmed_funding_on_file_means_nothing_can_be_reserved(tmp_path, monkeypatch):
+def test_no_confirmed_funding_on_file_means_nothing_can_be_spent(tmp_path, monkeypatch):
     monkeypatch.setattr(budget, "ROOT", tmp_path)
-    b = budget.Budget("anthropic", dict(CFG, confirmed_funding={}))
-    with pytest.raises(budget.BudgetRefused, match="confirmed funding"):
-        b.reserve("smoke", "x", 1.0)
+    assert budget.Funds(budget.Budget("anthropic", dict(CFG, confirmed_funding={}))).try_reserve(0.01) is False
 
 
-def test_plan_arithmetic_matches_the_agreed_counts():
-    assert budget.plan_check(CFG) == []
+def test_counts_and_absence_of_per_run_caps():
     assert CFG["sampling"]["main"] == 15 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 5
-    assert CFG["systems"]["closed_book"]["max_tokens"] * CFG["pricing"]["contestant"]["output"] / 1e6 < CFG["budget"]["closed_book"]["max_cost_usd"]
-    bad = dict(CFG, sampling=dict(CFG["sampling"], main=16))
-    assert any("main" in p for p in budget.plan_check(bad))  # a 16th question does not fit; it is reported, not trimmed
+    assert "budget" not in CFG and CFG["funding"]["anthropic"]["ceiling_usd"] == 310.0
+    assert all("budget" not in s for s in CFG["systems"].values())
 
 
 # ---------------------------------------------------------------- scoring semantics
@@ -251,6 +261,9 @@ def test_jev_spend_is_reserved_first_and_stops_at_its_limit(tmp_path, monkeypatc
     stats = grading.grade(tiny, cdir, tasks, ["jev"], mock=True)
     assert stats["jev"].get("ok", 0) >= 1 and sum(stats["jev"].values()) == 2
     assert budget.Budget("jev", tiny, mock=True).status()["committed"] <= 0.004
+    none = dict(CFG, confirmed_funding=dict(CFG["confirmed_funding"], jev=0.0))
+    (cdir / "grades" / "jev.jsonl").unlink()
+    assert set(grading.grade(none, cdir, tasks, ["jev"], mock=True)["jev"]) <= {"error_budget", "paused_budget"}
 
 
 def test_no_report_is_scored_by_rule_without_calling_a_judge(tmp_path, monkeypatch):
@@ -319,13 +332,12 @@ def test_missing_or_duplicated_criteria_in_a_batch_are_errors_for_those_items_on
     assert json.loads((tmp_path / res["session"]["id"] / "raw_verdicts.json").read_text())["verdicts"]  # original output kept
 
 
-def test_a_harness_that_dies_at_the_cap_is_a_budget_outcome_and_is_not_retried(gw, tmp_path):
+def test_a_harness_stopped_by_a_safeguard_is_labelled_and_not_treated_as_a_normal_result(gw, tmp_path):
     from hb import systems
-    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.01, max_wall_seconds=60)))
-    script = tmp_path / "dies_at_cap.py"
+    led = gw.open_run(tmp_path, policy(safeguards=dict(max_llm_calls=0)))
+    script = tmp_path / "one_call.py"
     script.write_text("import anthropic, os\nanthropic.Anthropic(max_retries=0).messages.create(model=os.environ['HB_MODEL'], "
                       "max_tokens=4000, messages=[dict(role='user', content='hi')])\n")
-    scfg = dict(kind="subprocess", budget="research", command=f"'{systems.ROOT}/.venv/bin/python' '{script}'")
-    cfg = dict(CFG, budget=dict(CFG["budget"], research=dict(max_cost_usd=0.01, max_wall_seconds=60)))
-    out = systems.run_subprocess("Q?", scfg, led, gw, cfg, tmp_path)
-    assert out["status"] == "budget_exhausted" and out["report"] == ""
+    scfg = dict(kind="subprocess", command=f"'{systems.ROOT}/.venv/bin/python' '{script}'")
+    out = systems.run_subprocess("Q?", scfg, led, gw, CFG, tmp_path)
+    assert out["status"] == "safeguard_interrupted" and out["report"] == "" and led.interrupted == "safeguard:llm_calls"

@@ -17,23 +17,19 @@ cache_read = 0.20
 input = 0.042
 output = 0.0
 
-# ------------------------------------------------------------------ funding plan (hard limits; nothing here buys credits)
-# How much is confirmed to be available at each provider is operational state, kept outside this file
-# in configs/funding.local.toml. Commitments can never exceed that amount or the pools below.
+# ------------------------------------------------------------------ funding (cumulative ceilings; nothing here buys credits)
+# There are no per-run dollar caps. Each provider has one cumulative ceiling for the round. A call is
+# dispatched only if its worst-case charge still fits under what remains. How much is confirmed to be
+# available at each provider is operational state kept in configs/funding.local.toml.
 [funding.anthropic]
-planned_usd = 310.0              # total for this round
-[funding.anthropic.pools]        # a pool can never borrow from another pool
-smoke = 34.0                     # 2 x ($1 + 4 x $4)
-main = 255.0                     # 15 x ($1 + 4 x $4)
-buffer = 21.0                    # paid preflight, infrastructure retries, contingency
+ceiling_usd = 310.0
 [funding.jev]
-planned_usd = 10.0
-[funding.jev.pools]
-grading = 10.0
+ceiling_usd = 10.0
 [funding.exa]
-planned_usd = 45.0
-[funding.exa.pools]
-research = 45.0                  # 68 research runs x $0.60 per-run cap = $40.80, plus retries
+ceiling_usd = 45.0
+[funding.enforcement]
+bytes_per_token = 3.0            # conservative input estimate for the worst-case hold on a call in flight
+reservation_wait_s = 600         # near the ceiling, a call waits this long for in-flight holds to settle before being refused
 
 # ------------------------------------------------------------------ dataset (pinned, hash-checked)
 [datasets.researchrubrics]
@@ -48,25 +44,19 @@ main = 15
 smoke = 2
 excluded = []                    # never "closed-book solved it"
 
-# ------------------------------------------------------------------ per-run caps
-[budget.closed_book]
-max_cost_usd = 1.0
-[budget.research]                # every tool-using arm, across all subagents and retries
-max_cost_usd = 4.0
-final_reserve_usd = 1.0          # research tools stop serving at $3.00 so $1.00 is left to write the report
-max_tool_calls = 150
-max_tool_cost_usd = 0.60         # Exa spend per run
-max_wall_seconds = 3600
-soft_fraction = 0.6              # tool results carry a "budget mostly used" notice from here
-[budget.enforcement]
-bytes_per_token = 3.0            # conservative input estimate used to reserve before dispatch (English is about 4)
-min_output_tokens = 1024         # a call that cannot be afforded this much output is refused instead of sent
-reservation_wait_s = 180         # concurrent subagent calls wait for in-flight reservations to settle before being refused
+# ------------------------------------------------------------------ safeguards (not budgets)
+# These exist only to stop a hung process or a runaway loop. They sit far above the use seen in smoke
+# runs. A run they interrupt is labelled "safeguard_interrupted" with the reason and is disclosed.
+[safeguards]
+max_wall_seconds = 14400         # 4 hours end to end (Hyperresearch documents 1.5 to 2.5 hours for its full pipeline)
+max_llm_calls = 3000
+max_tool_calls = 5000
+max_consecutive_llm_errors = 30  # e.g. a harness retrying a rejected request forever
 
 [execution]
 llm_request_timeout_s = 900
 sdk_max_retries = 2
-infra_retries = 1                # one re-attempt for an infrastructure failure, paid from the buffer pool
+infra_retries = 0                # no automatic re-run: with uncapped runs a repeat is an operator decision, made under a new campaign name
 kill_grace_s = 60
 
 [tools]
@@ -74,9 +64,9 @@ backend = "exa"                  # one backend for B, C, D and E. No fallback ba
 search_type = "auto"             # Exa retrieval. The synthesising modes (deep*) are not used.
 search_max_results = 5
 snippet_chars = 500              # raw page text. Exa highlights and summaries are model-generated and are not requested.
-fetch_max_chars = 30000          # Exa Contents raw text, cut with a visible marker
+fetch_max_chars = 30000          # the shared page reader's output size, identical for every research arm; cut with a visible marker
 timeout_s = 60
-search_reserve_usd = 0.015       # reserved per search before dispatch; reconciled to Exa's reported cost
+search_reserve_usd = 0.015       # held against the Exa ceiling while a call is in flight; settled to Exa's reported cost
 fetch_reserve_usd = 0.002
 blocked_domains = []
 blocked_url_substrings = ["researchrubrics", "2511.07685", "RuVerBench", "research.site"]
@@ -87,20 +77,17 @@ store_bodies = true
 # ------------------------------------------------------------------ contestants
 [systems.closed_book]            # A
 kind = "closed_book"
-budget = "closed_book"
 effort = "high"
-max_tokens = 20000               # $0.80 of output at list price, leaving room for input under the $1 cap
+max_tokens = 64000               # generous single-answer allowance; thinking and answer share it
 
 [systems.plain_tools]            # B
 kind = "plain_tools"
-budget = "research"
 effort = "high"
-max_tokens = 16000               # per call; the gateway lowers it further when the remaining budget is smaller
+max_tokens = 64000               # per call
 compaction = false
 
 [systems.gpt_researcher]         # C, modified configuration (see docs/COHORT.md)
 kind = "subprocess"
-budget = "research"
 command = "{root}/adapters/.venv-gptr/bin/python {root}/adapters/gptr_driver.py"
 shims = ["pin_effort"]
 [systems.gpt_researcher.env]
@@ -115,23 +102,21 @@ REPORT_SOURCE = "web"
 DEEP_RESEARCH_BREADTH = "3"      # harness defaults, kept
 DEEP_RESEARCH_DEPTH = "2"
 DEEP_RESEARCH_CONCURRENCY = "4"
-FAST_TOKEN_LIMIT = "8000"        # thinking shares max_tokens, so the stock 4000 would truncate
-STRATEGIC_TOKEN_LIMIT = "8000"
-SMART_TOKEN_LIMIT = "16000"
-SUMMARY_TOKEN_LIMIT = "4000"
+FAST_TOKEN_LIMIT = "16000"       # thinking shares max_tokens, so the stock 4000 would truncate
+STRATEGIC_TOKEN_LIMIT = "16000"
+SMART_TOKEN_LIMIT = "20000"      # non-streaming calls: the Anthropic SDK refuses larger allowances without streaming
+SUMMARY_TOKEN_LIMIT = "8000"
 
 [systems.deepagents]             # D, modified configuration
 kind = "subprocess"
-budget = "research"
 command = "{root}/adapters/.venv-deepagents/bin/python {root}/adapters/deepagents_driver.py"
 shims = ["pin_effort"]
 [systems.deepagents.env]
 HB_DEEPAGENTS_EXAMPLE = "{root}/adapters/vendor/deepagents/examples/deep_research"
-HB_MAX_TOKENS = "16000"
+HB_MAX_TOKENS = "20000"          # non-streaming calls: the Anthropic SDK refuses larger allowances without streaming
 
 [systems.hyperresearch]          # E, modified configuration (Claude Code runtime)
 kind = "subprocess"
-budget = "research"
 command = "{root}/adapters/.venv-hyperresearch/bin/python {root}/adapters/hyperresearch_driver.py"
 shims = ["pin_effort"]
 [systems.hyperresearch.env]
@@ -154,7 +139,7 @@ sdk_max_retries = 3
 timeout_s = 60
 concurrency = 6
 allow_long_context = true        # used only after an explicit context-limit error; recorded per judgment
-reserve_usd = 0.004              # reserved per call before dispatch
+reserve_usd = 0.004              # held against the Jev ceiling while a call is in flight
 [judges.jev.params]
 question_type = "choice"
 

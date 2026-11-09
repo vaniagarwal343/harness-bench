@@ -61,5 +61,30 @@
       "rr-605414",
       "rr-605451"
     ]
+  },
+  "main_12_fallback": {
+    "rule": "used only if 15 questions are not affordable: every domain keeps one question; two of the five two-question domains, chosen by a seeded shuffle, keep both",
+    "seed": "harness-bench-2026-11:main12",
+    "selected_on": "2026-11-09",
+    "selected_before_any_main_output": true,
+    "tasks": [
+      "rr-6053c9",
+      "rr-6053f5",
+      "rr-60542a",
+      "rr-605433",
+      "rr-60543e",
+      "rr-605441",
+      "rr-605469",
+      "rr-60548a",
+      "rr-9af308",
+      "rr-9af316",
+      "rr-9af31d",
+      "rr-9af332"
+    ],
+    "dropped_from_15": [
+      "rr-605371",
+      "rr-6053bb",
+      "rr-9af31b"
+    ]
   }
 }

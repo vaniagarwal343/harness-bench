@@ -57,8 +57,10 @@ def _client(led: Ledger, gw: Gateway, cfg: dict) -> anthropic.Anthropic:
 
 def _classify(e: Exception) -> str:
     s = str(e)
-    if "HB_BUDGET_EXHAUSTED" in s:
-        return "budget_exhausted"
+    if "HB_FUNDING_LIMIT" in s:
+        return "funding_limit_interrupted"
+    if "HB_SAFEGUARD" in s:
+        return "safeguard_interrupted"
     if "HB_POLICY" in s:
         return "policy_violation"
     return "failed_infra"
@@ -127,8 +129,8 @@ def run_plain_tools(question: str, scfg: dict, led: Ledger, gw: Gateway, cfg: di
             return dict(status="partial", report=_text(msg), stop_reason=msg.stop_reason, turns=turns)
     except anthropic.APIError as e:
         kind = _classify(e)
-        # Frozen rule: after a hard budget stop the last complete assistant text is NOT promoted to a
-        # report unless it came from an end_turn. Mid-research notes are not an answer.
+        # Frozen rule: after an interruption the last assistant text is NOT promoted to a report unless it
+        # came from an end_turn. Mid-research notes are not an answer.
         return dict(status=kind, report="", error=str(e)[:500], turns=turns, last_text_chars=len(last_text))
     finally:
         http.close()
@@ -149,7 +151,7 @@ def run_subprocess(question: str, scfg: dict, led: Ledger, gw: Gateway, cfg: dic
            for k, v in scfg.get("env", {}).items()},
     })
     cmd = [a.format(root=ROOT, work=work, model=cfg["model"]["id"]) for a in shlex.split(scfg["command"])]
-    budget = cfg["budget"][scfg["budget"]]
+    wall = cfg["safeguards"]["max_wall_seconds"]
     t0 = now()
     with open(run_dir / "stdout.log", "wb") as so, open(run_dir / "stderr.log", "wb") as se:
         try:
@@ -157,23 +159,26 @@ def run_subprocess(question: str, scfg: dict, led: Ledger, gw: Gateway, cfg: dic
         except FileNotFoundError as e:
             return dict(status="failed_infra", report="", error=f"adapter not installed: {e}")
         try:
-            code = p.wait(timeout=budget["max_wall_seconds"] + cfg["execution"]["kill_grace_s"])
+            code = p.wait(timeout=wall + cfg["execution"]["kill_grace_s"])
             timed_out = False
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)  # whole process group: subagents and retries die too
             code, timed_out = -9, True
     rp = work / "report.md"
     report = rp.read_text().strip() if rp.exists() else ""
-    if code == 0 and report:
+    if timed_out:
+        led.interrupt("safeguard:wall_time")
+    # An interruption is labelled as such even if a report file exists: it did not finish on its own.
+    if led.interrupted == "funding_limit":
+        status = "funding_limit_interrupted"
+    elif led.interrupted:
+        status = "safeguard_interrupted"
+    elif code == 0 and report:
         status = "completed"
     elif report:
-        status = "partial"
-    elif timed_out:
-        status = "timeout"
+        status = "partial"  # a final report exists but the harness process ended with an error
     else:
-        # A run that ended without a report after the gateway refused a model call for lack of budget is a
-        # budget outcome, not an infrastructure failure, and is not retried.
-        status = "budget_exhausted" if led.budget_refusals else "failed_infra"
+        status = "failed_infra"
     return dict(status=status, report=report, exit_code=code, timed_out=timed_out, wall_s=round(now() - t0, 1))
 
 

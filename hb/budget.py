@@ -1,16 +1,17 @@
-"""Persistent budget ledger: money is reserved BEFORE work is dispatched and reconciled afterwards.
+"""Persistent spending ledger with one cumulative ceiling per provider.
 
-One append-only JSONL file per funded provider under budget/. State is rebuilt by replaying the
-file, under an exclusive file lock, so concurrent workers and separate processes see one truth.
+There are no per-run dollar caps. The only spending limit is the provider's cumulative ceiling for
+the round (and, below it, the amount confirmed to be in the account). Every model call is appended
+to the ledger as it is metered, so the record survives a crash, and a call is only dispatched if
+its worst-case charge still fits under the ceiling (hb/gateway.py holds that reservation in memory
+while the call is in flight).
 
-  reserve(pool, key, amount)   refuse unless  committed(pool) + amount <= pool size
-                                         and  committed(all)  + amount <= confirmed funding
-  reconcile(key, actual)       replace the reservation by what was actually charged
+One append-only JSONL file per provider under budget/. Entries:
+  spend      category, key, amount         one metered charge (a model call, a search, a judgment)
+  reserve / reconcile / release            entries written by the earlier per-run-cap scheme; still counted
 
-committed = actual cost of reconciled entries + full amount of still-open reservations.
-A reservation left open by a crash stays reserved (conservative) until released by hand with
-`hb budget --release KEY`. Pools never borrow from each other, so debugging on the smoke or buffer
-pool cannot eat into the main allocation.
+Categories separate what the money was for (smoke, main, preflight, infrastructure_bug, grading).
+They are labels for reporting, not sub-limits.
 """
 from __future__ import annotations
 
@@ -29,30 +30,29 @@ class BudgetRefused(Exception):
 class Budget:
     def __init__(self, provider: str, cfg: dict, mock: bool = False):
         f = cfg["funding"][provider]
+        self.provider, self.ceiling = provider, float(f["ceiling_usd"])
         # No confirmed amount on file means nothing may be spent with that provider.
-        self.provider, self.pools, self.confirmed = provider, dict(f["pools"]), float(cfg.get("confirmed_funding", {}).get(provider, 0.0))
+        self.confirmed = float(cfg.get("confirmed_funding", {}).get(provider, 0.0))
+        self.limit = min(self.ceiling, self.confirmed)
         self.path = ROOT / "budget" / f"{provider}{'.mock' if mock else ''}.jsonl"
         self._tl = threading.Lock()
 
-    # ------------------------------------------------------------ state
-    def _replay(self, lines: list[str]) -> dict:
-        ent: dict[str, dict] = {}
+    def _entries(self, lines: list[str]) -> tuple[dict, list]:
+        legacy: dict[str, dict] = {}
+        spends = []
         for line in lines:
             if not line.strip():
                 continue
             e = json.loads(line)
-            if e["op"] == "reserve":
-                ent[e["key"]] = dict(pool=e["pool"], reserved=e["amount"], actual=None)
-            elif e["op"] == "reconcile" and e["key"] in ent:
-                ent[e["key"]]["actual"] = e["actual"]
-            elif e["op"] == "release" and e["key"] in ent:
-                ent[e["key"]]["actual"] = 0.0
-        return ent
-
-    @staticmethod
-    def _committed(ent: dict, pool: str | None = None) -> float:
-        return sum((e["reserved"] if e["actual"] is None else e["actual"]) for e in ent.values()
-                   if pool is None or e["pool"] == pool)
+            if e["op"] == "spend":
+                spends.append(e)
+            elif e["op"] == "reserve":
+                legacy[e["key"]] = dict(category=e.get("pool", "legacy"), reserved=e["amount"], actual=None)
+            elif e["op"] == "reconcile" and e["key"] in legacy:
+                legacy[e["key"]]["actual"] = e["actual"]
+            elif e["op"] == "release" and e["key"] in legacy:
+                legacy[e["key"]]["actual"] = 0.0
+        return legacy, spends
 
     def _locked(self, fn):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,8 +60,8 @@ class Budget:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
                 f.seek(0)
-                ent = self._replay(f.read().splitlines())
-                out, rec = fn(ent)
+                legacy, spends = self._entries(f.read().splitlines())
+                out, rec = fn(legacy, spends)
                 if rec:
                     f.write(json.dumps(dict(rec, ts=now()), sort_keys=True) + "\n")
                     f.flush()
@@ -69,60 +69,50 @@ class Budget:
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
-    # ------------------------------------------------------------ operations
-    def reserve(self, pool: str, key: str, amount: float) -> None:
-        def fn(ent):
-            if key in ent:
-                raise BudgetRefused(f"{self.provider}: reservation {key!r} already exists")
-            pc, tc = self._committed(ent, pool), self._committed(ent)
-            if pc + amount > self.pools[pool] + 1e-9:
-                raise BudgetRefused(f"{self.provider}/{pool}: ${pc:.2f} committed of ${self.pools[pool]:.2f}; cannot reserve ${amount:.2f}")
-            if tc + amount > self.confirmed + 1e-9:
-                raise BudgetRefused(f"{self.provider}: ${tc:.2f} committed of ${self.confirmed:.2f} confirmed funding; "
-                                    f"cannot reserve ${amount:.2f}. Raise {self.provider}.confirmed_usd in configs/funding.local.toml only after the money is in the account.")
-            return None, dict(op="reserve", pool=pool, key=key, amount=round(amount, 6))
-        self._locked(fn)
+    @staticmethod
+    def _committed(legacy: dict, spends: list) -> float:
+        return sum((e["reserved"] if e["actual"] is None else e["actual"]) for e in legacy.values()) + sum(s["amount"] for s in spends)
 
-    def reconcile(self, key: str, actual: float) -> None:
-        def fn(ent):
-            if key not in ent:
-                raise KeyError(key)
-            return None, dict(op="reconcile", key=key, actual=round(actual, 6),
-                              over_reservation=bool(actual > ent[key]["reserved"] + 1e-6))
-        self._locked(fn)
+    def committed(self) -> float:
+        return self._locked(lambda l, s: (self._committed(l, s), None))
 
-    def release(self, key: str, why: str) -> None:
-        self._locked(lambda ent: (None, dict(op="release", key=key, why=why)))
+    def remaining(self) -> float:
+        return self.limit - self.committed()
+
+    def spend(self, category: str, key: str, amount: float, note: str = "") -> None:
+        """Record a charge that has already happened. Never refuses: what was spent is recorded."""
+        if amount:
+            self._locked(lambda l, s: (None, dict(op="spend", category=category, key=key, amount=round(amount, 6), note=note)))
 
     def status(self) -> dict:
-        def fn(ent):
-            pools = {p: dict(size=s, spent=round(sum(e["actual"] for e in ent.values() if e["pool"] == p and e["actual"] is not None), 4),
-                             open_reserved=round(sum(e["reserved"] for e in ent.values() if e["pool"] == p and e["actual"] is None), 4))
-                     for p, s in self.pools.items()}
-            for p in pools.values():
-                p["available"] = round(p["size"] - p["spent"] - p["open_reserved"], 4)
-            tc = self._committed(ent)
-            return dict(provider=self.provider, confirmed_usd=self.confirmed, committed=round(tc, 4),
-                        headroom_vs_confirmed=round(self.confirmed - tc, 4), pools=pools,
-                        open=[k for k, e in ent.items() if e["actual"] is None],
-                        over_reservation=[k for k, e in ent.items() if e["actual"] is not None and e["actual"] > e["reserved"] + 1e-6]), None
+        def fn(legacy, spends):
+            cats: dict[str, float] = {}
+            for e in legacy.values():
+                cats[e["category"]] = cats.get(e["category"], 0.0) + (e["reserved"] if e["actual"] is None else e["actual"])
+            for s in spends:
+                cats[s["category"]] = cats.get(s["category"], 0.0) + s["amount"]
+            tc = self._committed(legacy, spends)
+            return dict(provider=self.provider, ceiling_usd=self.ceiling, confirmed_usd=self.confirmed, committed=round(tc, 4),
+                        remaining_vs_ceiling=round(self.ceiling - tc, 4), remaining_vs_confirmed=round(self.confirmed - tc, 4),
+                        by_category={k: round(v, 4) for k, v in sorted(cats.items())},
+                        open=[k for k, e in legacy.items() if e["actual"] is None]), None
         return self._locked(fn)
 
 
-def plan_check(cfg: dict) -> list[str]:
-    """Static arithmetic: do the frozen counts and caps fit the pools and the funding? Returns problems."""
-    cb, rs = cfg["budget"]["closed_book"]["max_cost_usd"], cfg["budget"]["research"]["max_cost_usd"]
-    n_res = sum(1 for s in cfg["systems"].values() if s["budget"] == "research")
-    n_cb = sum(1 for s in cfg["systems"].values() if s["budget"] == "closed_book")
-    per_q = n_cb * cb + n_res * rs
-    a, out = cfg["funding"]["anthropic"], []
-    for pool, n in (("main", cfg["sampling"]["main"]), ("smoke", cfg["sampling"]["smoke"])):
-        if n * per_q > a["pools"][pool] + 1e-9:
-            out.append(f"{pool}: {n} questions x ${per_q:.2f} = ${n * per_q:.2f} exceeds the {pool} pool ${a['pools'][pool]:.2f}")
-    if sum(a["pools"].values()) > a["planned_usd"] + 1e-9:
-        out.append(f"pools sum to ${sum(a['pools'].values()):.2f}, above planned funding ${a['planned_usd']:.2f}")
-    exa = cfg["funding"]["exa"]
-    need = (cfg["sampling"]["main"] + cfg["sampling"]["smoke"]) * n_res * cfg["budget"]["research"]["max_tool_cost_usd"]
-    if need > exa["pools"]["research"] + 1e-9:
-        out.append(f"exa: worst case ${need:.2f} exceeds the research pool ${exa['pools']['research']:.2f}")
-    return out
+class Funds:
+    """In-process guard in front of a Budget: holds worst-case reservations for calls in flight."""
+
+    def __init__(self, budget: Budget):
+        self.b, self.reserved, self.lock = budget, 0.0, threading.Lock()
+
+    def try_reserve(self, amount: float) -> bool:
+        with self.lock:
+            if self.b.remaining() - self.reserved < amount:
+                return False
+            self.reserved += amount
+            return True
+
+    def settle(self, reserved: float, actual: float, category: str, key: str, note: str = "") -> None:
+        with self.lock:
+            self.reserved = max(0.0, self.reserved - reserved)
+        self.b.spend(category, key, actual, note)

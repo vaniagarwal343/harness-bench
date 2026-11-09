@@ -25,7 +25,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .budget import Budget, BudgetRefused
+from .budget import Budget, Funds
 from .util import ROOT, append_jsonl, canon, now, read_json, read_jsonl, secret, sha256_text  # noqa: F401 (re-exported)
 
 OK = "ok"
@@ -226,7 +226,8 @@ def grade_astra(cfg: dict, items: list[dict], path: Path, sessions_dir: Path, mo
 def grade_jev(cfg: dict, items: list[dict], path: Path, mock: bool, retry_errors: bool) -> dict:
     jcfg = cfg["judges"]["jev"]
     done, counts = first_ok(path), _attempt_counts(path)
-    budget = Budget("jev", cfg, mock)
+    funds = Funds(Budget("jev", cfg, mock))
+    campaign = path.parent.parent.name
 
     def work(it: dict) -> str:
         key = key_for("jev", cfg, it)
@@ -239,18 +240,15 @@ def grade_jev(cfg: dict, items: list[dict], path: Path, mock: bool, retry_errors
                 return "paused_budget"
             used += 1; n += 1
             t0 = now()
-            bkey = f"{path.parent.parent.name}/{it['run_id']}/{it['cid']}/{key[:8]}/{n}"
-            try:
-                budget.reserve("grading", bkey, jcfg["reserve_usd"])  # reserved before the call is made
-            except BudgetRefused as e:
+            if not funds.try_reserve(jcfg["reserve_usd"]):  # held against the Jev ceiling before the call is made
                 STOP["jev"].set()
-                return _record(path, it, "jev", key, n, dict(state="error_budget", error=str(e)[:300]), t0)
+                return _record(path, it, "jev", key, n, dict(state="error_budget", error="Jev spending ceiling reached"), t0)
             try:
                 a = jev_attempt(it["question"], it["report"], it["criterion"], jcfg, mock)
             except Exception as e:  # a judge bug is an error attempt, not a verdict
                 a = dict(state="error_other", error=f"{type(e).__name__}: {e}"[:300])
             cost = jev_cost(a.get("usage") or {}, cfg)
-            budget.reconcile(bkey, cost)
+            funds.settle(jcfg["reserve_usd"], cost, "grading", f"{campaign}/{it['run_id']}")
             state = _record(path, it, "jev", key, n, a, t0, dict(cost_usd=round(cost, 6)))
             if state == "error_quota":
                 STOP["jev"].set()  # pause: the remaining items are not sent, and nothing is rerouted

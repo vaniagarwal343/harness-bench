@@ -34,8 +34,6 @@ The WebSearch and WebFetch tools are not available in this run, and there is no 
 - To search the web: `{hpr} websearch "<query>" -j` (returns title, url and a short snippet per result).
 - To read a page: `{hpr} fetch "<url>" ...` exactly as described elsewhere in these instructions.
 Academic-API, PDF-download and browser lanes that need direct network access will fail; use web search and fetch instead.
-If a search or fetch reports that the research budget is used, stop gathering and go straight to writing the final report
-with the evidence already collected. Finishing the report matters more than completing every remaining step.
 """
 SANDBOX = """(version 1)
 (allow default)

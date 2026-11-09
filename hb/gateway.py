@@ -3,11 +3,16 @@
 It is the one place where these hold identically for an in-process loop and for a third-party
 framework running as a child process:
   * every generative call is the pinned model, with no fallback
-  * B, C and D share one search backend and one page reader
-  * the per-run dollar cap covers all subagents and retries, and money is RESERVED before a
-    request is dispatched (conservative input estimate + the full max_tokens at output price),
-    then reconciled to actual usage
+  * the research arms share one search backend and one page reader
   * every attempted call is traced and costed, including refused and failed ones
+  * the round's cumulative spending ceiling cannot be passed: a call is dispatched only if its
+    worst-case charge still fits under what remains, and each metered charge is written to the
+    persistent ledger as it happens
+
+There is NO per-run dollar cap, research-call cap, writing reserve or output reduction. A workflow
+runs until it finishes. Two things can interrupt it, and both are labelled on the run:
+  * safeguards against a hang or a runaway loop (wall time, number of calls, consecutive errors)
+  * the cumulative funding ceiling
 
   POST /v1/messages                 Anthropic Messages proxy (stream and non-stream)
   POST /v1/messages/count_tokens    passthrough, logged, unbilled
@@ -15,8 +20,8 @@ framework running as a child process:
   GET  /tools/gptr                  GPT Researcher custom-retriever contract on the same tools
 
 The contestant holds only a per-run token. Real keys stay in this process. A request is forwarded
-unchanged, refused with a logged policy violation, or changed by a named shim that is logged on
-that call (pin_effort, clamp_max_tokens).
+unchanged, refused with a logged policy violation, or changed by the one named shim (pin_effort),
+which is logged on that call.
 """
 from __future__ import annotations
 
@@ -60,20 +65,18 @@ class Ledger:
     usage: dict = field(default_factory=lambda: dict(input_tokens=0, output_tokens=0,
                                                      cache_creation_input_tokens=0, cache_read_input_tokens=0))
     cost_usd: float = 0.0
-    reserved_usd: float = 0.0       # model spend reserved for in-flight calls
-    inflight: int = 0
-    max_committed_usd: float = 0.0  # high-water mark of spent + reserved; must never exceed the cap
+    category: str = "smoke"         # ledger label for this run's charges
+    key: str = ""                   # ledger key for this run attempt
+    consecutive_errors: int = 0
+    interrupted: str | None = None  # "safeguard:<reason>" or "funding_limit"; set once, disclosed on the run
     tool_calls: dict = field(default_factory=lambda: dict(search=0, fetch=0))
     tool_errors: int = 0
     tool_cost_usd: float = 0.0
-    tool_reserved_usd: float = 0.0
-    budget_refusals: int = 0        # model calls refused because the run's cap could not cover them
     models_seen: dict = field(default_factory=dict)
     efforts_seen: dict = field(default_factory=dict)
     violations: list = field(default_factory=list)
     seq: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
-    cond: asyncio.Condition | None = None
 
     def add_usage(self, u: dict) -> float:
         p = self.pricing
@@ -86,27 +89,23 @@ class Ledger:
             self.cost_usd += cost
         return cost
 
-    def wall_exceeded(self) -> bool:
-        w = self.policy.get("budget", {}).get("max_wall_seconds")
-        return w is not None and now() - self.started >= w
+    def safeguard(self) -> str | None:
+        """Protection against a hang or a runaway loop. Not a resource budget: limits sit far above normal use."""
+        g = self.policy.get("safeguards", {})
+        if g.get("max_wall_seconds") is not None and now() - self.started >= g["max_wall_seconds"]:
+            return "wall_time"
+        if g.get("max_llm_calls") is not None and self.llm_calls > g["max_llm_calls"]:
+            return "llm_calls"
+        if g.get("max_tool_calls") is not None and sum(self.tool_calls.values()) > g["max_tool_calls"]:
+            return "tool_calls"
+        if g.get("max_consecutive_llm_errors") is not None and self.consecutive_errors >= g["max_consecutive_llm_errors"]:
+            return "consecutive_errors"
+        return None
 
-    def research_closed(self) -> bool:
-        """Research tools stop early so the remaining money can pay for the final report."""
-        b = self.policy.get("budget", {})
-        cap = b.get("max_cost_usd")
-        return cap is not None and self.cost_usd + self.reserved_usd >= cap - b.get("final_reserve_usd", 0.0)
-
-    def near_limit(self) -> bool:
-        b = self.policy.get("budget", {})
-        f = b.get("soft_fraction", 0.6)
-        checks = []
-        if b.get("max_cost_usd"):
-            checks.append(self.cost_usd / (b["max_cost_usd"] - b.get("final_reserve_usd", 0.0)))
-        if b.get("max_tool_calls"):
-            checks.append(sum(self.tool_calls.values()) / b["max_tool_calls"])
-        if b.get("max_tool_cost_usd"):
-            checks.append(self.tool_cost_usd / b["max_tool_cost_usd"])
-        return any(c >= f for c in checks)
+    def interrupt(self, why: str) -> None:
+        if self.interrupted is None:
+            self.interrupted = why
+            append_jsonl(self.run_dir / "trace.jsonl", dict(type="interrupted", ts=now(), why=why))
 
     def violation(self, kind: str, detail: str) -> None:
         v = dict(ts=now(), kind=kind, detail=detail)
@@ -116,15 +115,17 @@ class Ledger:
 
     def summary(self) -> dict:
         return dict(llm_calls=self.llm_calls, llm_errors=self.llm_errors, usage=dict(self.usage),
-                    cost_usd=round(self.cost_usd, 6), max_committed_usd=round(self.max_committed_usd, 6),
-                    budget_refusals=self.budget_refusals, tool_calls=dict(self.tool_calls), tool_errors=self.tool_errors, tool_cost_usd=round(self.tool_cost_usd, 6),
+                    cost_usd=round(self.cost_usd, 6), interrupted=self.interrupted,
+                    tool_calls=dict(self.tool_calls), tool_errors=self.tool_errors, tool_cost_usd=round(self.tool_cost_usd, 6),
                     models_seen=dict(self.models_seen), efforts_seen=dict(self.efforts_seen),
                     violations=list(self.violations), gateway_seconds=round(now() - self.started, 2))
 
 
 class Gateway:
     def __init__(self, cfg: dict, anthropic_key: str | None, tool_key: str | None, mock: bool = False):
+        from .budget import Budget, Funds
         self.cfg, self.mock = cfg, mock
+        self.funds = {"anthropic": Funds(Budget("anthropic", cfg, mock)), "exa": Funds(Budget("exa", cfg, mock))}
         self.anthropic_key, self.tool_key = anthropic_key, tool_key
         self.ledgers: dict[str, Ledger] = {}
         self.port: int | None = None
@@ -157,8 +158,9 @@ class Gateway:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def open_run(self, run_dir: Path, policy: dict) -> Ledger:
-        led = Ledger(run_dir=run_dir, policy=policy, pricing=self.cfg["pricing"]["contestant"])
+    def open_run(self, run_dir: Path, policy: dict, category: str = "smoke", key: str = "") -> Ledger:
+        led = Ledger(run_dir=run_dir, policy=policy, pricing=self.cfg["pricing"]["contestant"], category=category,
+                     key=key or str(run_dir))
         self.ledgers[led.token] = led
         return led
 
@@ -210,44 +212,22 @@ class Gateway:
             f.append("assistant_prefill")
         return f
 
-    async def _reserve(self, led: Ledger, n_bytes: int, requested: int) -> tuple[int, float] | str:
-        """Reserve the worst-case charge for one call. Returns (granted max_tokens, reserved USD) or a refusal."""
-        enf, p = self.cfg["budget"]["enforcement"], led.pricing
-        cap = led.policy.get("budget", {}).get("max_cost_usd")
-        est_in = n_bytes / enf["bytes_per_token"] * max(p["input"], p["cache_write"]) / 1e6
-        if led.cond is None:
-            led.cond = asyncio.Condition()
+    async def _reserve(self, led: Ledger, n_bytes: int, max_tokens: int) -> float | str:
+        """Hold this call's worst-case charge against the round's cumulative ceiling. Returns USD held, or a refusal."""
+        why = led.safeguard()
+        if why:
+            led.interrupt(f"safeguard:{why}")
+            return f"HB_SAFEGUARD ({why}); this run was stopped by a hang/runaway safeguard"
+        enf, p = self.cfg["funding"]["enforcement"], led.pricing
+        worst = n_bytes / enf["bytes_per_token"] * max(p["input"], p["cache_write"]) / 1e6 + max_tokens * p["output"] / 1e6
         deadline = now() + enf["reservation_wait_s"]
-        async with led.cond:
-            while True:
-                if led.wall_exceeded():
-                    return "HB_BUDGET_EXHAUSTED (wall_time); no further model calls are possible in this run"
-                if cap is None:
-                    granted = requested
-                    break
-                room = cap - led.cost_usd - led.reserved_usd - est_in
-                afford = int(room / p["output"] * 1e6)
-                if afford >= min(enf["min_output_tokens"], requested):
-                    granted = min(requested, afford)
-                    break
-                if led.inflight == 0 or now() >= deadline:
-                    return (f"HB_BUDGET_EXHAUSTED (cost: ${led.cost_usd:.2f} spent of ${cap:.2f}); "
-                            "no further model calls are possible in this run")
-                try:  # other calls of this run are in flight: their reservations shrink to actual cost when they finish
-                    await asyncio.wait_for(led.cond.wait(), timeout=max(0.1, deadline - now()))
-                except asyncio.TimeoutError:
-                    pass
-            reserve = est_in + granted * p["output"] / 1e6
-            led.reserved_usd += reserve
-            led.inflight += 1
-            led.max_committed_usd = max(led.max_committed_usd, led.cost_usd + led.reserved_usd)
-        return granted, reserve
-
-    async def _release(self, led: Ledger, reserve: float) -> None:
-        async with led.cond:
-            led.reserved_usd = max(0.0, led.reserved_usd - reserve)
-            led.inflight -= 1
-            led.cond.notify_all()
+        while not self.funds["anthropic"].try_reserve(worst):
+            if self.funds["anthropic"].reserved <= 0 or now() >= deadline:
+                led.interrupt("funding_limit")
+                return ("HB_FUNDING_LIMIT: the round's cumulative spending ceiling cannot cover this call; "
+                        "no further model calls are possible")
+            await asyncio.sleep(2)  # other calls in flight hold reservations that shrink to actual cost when they finish
+        return worst
 
     # ------------------------------------------------------------ LLM proxy
     async def messages(self, request: Request) -> Response:
@@ -271,23 +251,29 @@ class Gateway:
         if self.cfg["trace"].get("store_bodies", True):
             (led.run_dir / "llm").mkdir(parents=True, exist_ok=True)
             (led.run_dir / "llm" / f"{seq:05d}.req.json").write_bytes(raw)
-        reserve = [0.0]
+        reserve, dispatched = [0.0], [False]
 
         def finish(status: int, resp: dict | None, err: str | None = None) -> None:
             usage = (resp or {}).get("usage") or {}
             rec.update(status=status, latency_s=round(now() - rec["ts"], 3), response_model=(resp or {}).get("model"),
                        stop_reason=(resp or {}).get("stop_reason"), usage=usage, error=err, reserved_usd=round(reserve[0], 6),
                        request_id=(resp or {}).get("_request_id"))
-            if not usage and status == 599 and rec.get("dispatched"):
+            if not usage and status == 599 and rec.get("dispatched"):  # noqa: E501
                 # The request reached the provider but its usage never came back (dropped or unreadable stream).
                 # It may have been billed, so the whole reservation is counted as spent.
                 with led.lock:
                     led.cost_usd += reserve[0]
+                    led.unmetered_usd = getattr(led, "unmetered_usd", 0.0) + reserve[0]
                 rec["cost_usd"], rec["cost_basis"] = round(reserve[0], 6), "full_reservation_usage_unknown"
             if usage:  # billed whenever the provider reports usage, including interrupted streams
                 rec["cost_usd"] = round(led.add_usage(usage), 6)
-                if rec["cost_usd"] > reserve[0] + 1e-6 and led.policy.get("budget", {}).get("max_cost_usd") is not None:
+                if rec["cost_usd"] > reserve[0] + 1e-6 and reserve[0] > 0:
                     led.violation("reservation_underestimate", f"call {seq}: cost {rec['cost_usd']} > reserved {reserve[0]:.6f}")
+            if dispatched[0]:  # written to the persistent ledger as it is metered, so a crash loses nothing
+                self.funds["anthropic"].settle(reserve[0], rec.get("cost_usd", 0.0), led.category, led.key)
+                dispatched[0] = False
+            with led.lock:
+                led.consecutive_errors = 0 if status == 200 else led.consecutive_errors + 1
             if status == 200 and resp:
                 m = resp.get("model") or "?"
                 with led.lock:
@@ -312,25 +298,18 @@ class Gateway:
             body.setdefault("output_config", {})["effort"] = led.policy["effort"]
             rec["shims"].append("pin_effort")
         rec["effective_effort"] = (body.get("output_config") or {}).get("effort") or "default(high)"
-        requested = int(body.get("max_tokens") or 0)
-        got = await self._reserve(led, len(raw), requested)
+        got = await self._reserve(led, len(raw), int(body.get("max_tokens") or 0))
         if isinstance(got, str):
-            with led.lock:
-                led.budget_refusals += 1
             finish(400, None, got)
             return _err(400, got)
-        granted, reserve[0] = got
-        if granted < requested:  # output allowance lowered to what the remaining budget can pay for
-            body["max_tokens"] = granted
-            rec["shims"].append("clamp_max_tokens")
-        rec["effective_max_tokens"] = granted
+        reserve[0], dispatched[0] = got, True
+        rec["effective_max_tokens"] = body.get("max_tokens")
         payload = json.dumps(body).encode() if rec["shims"] else raw
 
         if self.mock:
             from .mock import mock_message, sse_bytes
             resp = mock_message(body)
             finish(200, resp)
-            await self._release(led, reserve[0])
             if body.get("stream"):
                 return Response(sse_bytes(resp), media_type="text/event-stream")
             return JSONResponse(resp)
@@ -348,13 +327,11 @@ class Gateway:
                     r = await c.post(ANTHROPIC_URL + "/v1/messages", content=payload, headers=headers)
             except httpx.HTTPError as e:
                 finish(599, None, f"upstream transport: {e!r}")
-                await self._release(led, reserve[0])
                 return _err(529, "HB upstream transport error", "overloaded_error")
             data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             data["_request_id"] = r.headers.get("request-id")
             finish(r.status_code, data if r.status_code == 200 else None,
                    None if r.status_code == 200 else json.dumps(data.get("error"))[:500])
-            await self._release(led, reserve[0])
             data.pop("_request_id", None)
             return JSONResponse(data, status_code=r.status_code,
                                 headers={k: v for k, v in r.headers.items() if k in ("retry-after", "request-id")})
@@ -366,13 +343,11 @@ class Gateway:
         except httpx.HTTPError as e:
             await client.aclose()
             finish(599, None, f"upstream transport: {e!r}")
-            await self._release(led, reserve[0])
             return _err(529, "HB upstream transport error", "overloaded_error")
         if up.status_code != 200:
             data = await up.aread()
             await up.aclose(); await client.aclose()
             finish(up.status_code, None, data.decode("utf-8", "replace")[:500])
-            await self._release(led, reserve[0])
             return Response(data, status_code=up.status_code, media_type="application/json",
                             headers={k: v for k, v in up.headers.items() if k == "retry-after"})
 
@@ -390,7 +365,6 @@ class Gateway:
                 finish(200 if resp.get("stop_reason") else 599, resp or None, f"stream interrupted: {e!r}")
                 raise
             finally:
-                await self._release(led, reserve[0])
                 await up.aclose(); await client.aclose()
 
         return StreamingResponse(relay(), media_type="text/event-stream")
@@ -411,24 +385,21 @@ class Gateway:
 
     # ------------------------------------------------------------ research tools
     async def _tool_call(self, led: Ledger, kind: str, args: dict) -> dict:
-        tcfg, b = self.cfg["tools"], led.policy.get("budget", {})
+        tcfg = self.cfg["tools"]
         with led.lock:
             led.seq += 1
             seq = led.seq
             led.tool_calls[kind] += 1  # attempts count, including refused ones
-            total = sum(led.tool_calls.values())
-            res = tcfg[f"{kind}_reserve_usd"]
-            cap = b.get("max_tool_cost_usd")
-            refuse = None
-            if b.get("max_tool_calls") is not None and total > b["max_tool_calls"]:
-                refuse = "HB_RESEARCH_BUDGET_USED: no research calls remain. Write your final report now with the evidence you have."
-            elif cap is not None and led.tool_cost_usd + led.tool_reserved_usd + res > cap:
-                refuse = "HB_RESEARCH_BUDGET_USED: the search allowance is spent. Write your final report now with the evidence you have."
-            elif led.research_closed() or led.wall_exceeded():
-                refuse = "HB_RESEARCH_BUDGET_USED: the remaining budget is reserved for writing. Write your final report now with the evidence you have."
-            else:
-                led.tool_reserved_usd += res  # reserved before the backend is called
-        rec = dict(type="tool", seq=seq, ts=now(), tool=kind, args=args, reserved_usd=0.0 if refuse else res)
+        res = tcfg[f"{kind}_reserve_usd"]
+        refuse = None
+        why = led.safeguard()
+        if why:
+            led.interrupt(f"safeguard:{why}")
+            refuse = f"HB_SAFEGUARD ({why}); this run was stopped by a hang/runaway safeguard"
+        elif not self.funds["exa"].try_reserve(res):
+            led.interrupt("funding_limit")
+            refuse = "HB_FUNDING_LIMIT: the round's research-backend spending ceiling is reached"
+        rec = dict(type="tool", seq=seq, ts=now(), tool=kind, args=args)
         cost = 0.0
         if refuse:
             out: dict = {"error": refuse}
@@ -437,14 +408,12 @@ class Gateway:
                 out, cost = await (self._search(args, tcfg) if kind == "search" else self._fetch(args, tcfg))
             except Exception as e:  # explicit tool failure, visible to the model and in the trace
                 out = {"error": f"tool backend failure: {type(e).__name__}: {str(e)[:200]}"}
+            self.funds["exa"].settle(res, cost, led.category, led.key)
             with led.lock:
-                led.tool_reserved_usd = max(0.0, led.tool_reserved_usd - res)
                 led.tool_cost_usd += cost
         if "error" in out:
             with led.lock:
                 led.tool_errors += 1
-        elif led.near_limit():
-            out["notice"] = "Most of this run's research budget is used. Start writing with the evidence you have."
         rec.update(latency_s=round(now() - rec["ts"], 3), error=out.get("error"), cost_usd=round(cost, 6), refused=bool(refuse),
                    result_sha256=sha256_text(canon(out)), result_chars=len(canon(out)),
                    urls=[r.get("url") for r in out.get("results", [])] or ([out["url"]] if out.get("url") else []))

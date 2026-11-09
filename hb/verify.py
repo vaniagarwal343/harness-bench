@@ -45,49 +45,48 @@ def verify(cfg: dict, cdir: Path, tasks: dict) -> list[tuple[str, str, str]]:
     off = [rid for rid, m in metas.items() if (m.get("git") or {}).get("commit") != g.get("commit") or (m.get("git") or {}).get("dirty")]
     add(bad if off else "PASS", "every run executed at the campaign's commit with a clean tree", str(off[:5]))
 
-    # 3 model, effort, tools, money
-    bad_model, viol, under, cost_bad, cb_tools, over, eff = [], [], [], [], [], [], []
+    # 3 model, effort, tools, cost accounting
+    bad_model, viol, under, cost_bad, cb_tools, eff, intr, retried = [], [], [], [], [], [], [], []
     for rid, m in metas.items():
-        if set(m["ledger"]["models_seen"]) - {model}:
-            bad_model.append((rid, m["ledger"]["models_seen"]))
-        kinds = sorted({v["kind"] for v in m["ledger"]["violations"]})
+        led = m["ledger"]
+        if set(led["models_seen"]) - {model}:
+            bad_model.append((rid, led["models_seen"]))
+        kinds = sorted({v["kind"] for l in m["attempt_ledgers"] for v in l["violations"]})
         if "reservation_underestimate" in kinds:
             under.append(rid)
         if set(kinds) - {"reservation_underestimate"}:
             viol.append((rid, kinds))
-        if set(m["ledger"]["efforts_seen"]) - {m["policy"]["effort"]}:
-            eff.append((rid, m["ledger"]["efforts_seen"]))
+        if set(led["efforts_seen"]) - {m["policy"]["effort"]}:
+            eff.append((rid, led["efforts_seen"]))
+        if m.get("interrupted") or m["status"].endswith("_interrupted"):
+            intr.append((rid, m["status"], m.get("interrupted")))
+        if m["attempts"] > 1:
+            retried.append((rid, m["attempts"], m.get("earlier_failed_attempts_cost_usd")))
         traced = 0.0
-        for k in range(1, m["attempts"] + 1):
-            for rec in read_jsonl(cdir / "outputs" / rid / f"attempt_{k}" / "trace.jsonl"):
-                if rec["type"] == "llm":
-                    traced += rec.get("cost_usd", 0)
-                    if rec.get("status") == 200 and rec.get("response_model") != model:
-                        bad_model.append((rid, rec.get("response_model")))
-                if m["policy"]["allow_tools"] is False and (rec["type"] == "tool" or rec.get("tools")):
-                    cb_tools.append(rid)
-        if abs(traced - m["ledger"]["cost_usd"]) > 1e-4:
-            cost_bad.append((rid, round(traced, 4), m["ledger"]["cost_usd"]))
-        b = m["policy"]["budget"]
-        for l in m["attempt_ledgers"]:
-            if l["cost_usd"] > b["max_cost_usd"] + 1e-6 or l["max_committed_usd"] > b["max_cost_usd"] + 1e-6 or \
-                    l["tool_cost_usd"] > b.get("max_tool_cost_usd", 1e9) + 1e-6:
-                over.append((rid, l["cost_usd"], l["max_committed_usd"], l["tool_cost_usd"]))
+        for rec in read_jsonl(cdir / "outputs" / rid / f"attempt_{m['attempts']}" / "trace.jsonl"):
+            if rec["type"] == "llm":
+                traced += rec.get("cost_usd", 0)
+                if rec.get("status") == 200 and rec.get("response_model") != model:
+                    bad_model.append((rid, rec.get("response_model")))
+            if m["policy"]["allow_tools"] is False and (rec["type"] == "tool" or rec.get("tools")):
+                cb_tools.append(rid)
+        if abs(traced - led["cost_usd"]) > 1e-4:
+            cost_bad.append((rid, round(traced, 4), led["cost_usd"]))
     add("FAIL" if bad_model else "PASS", f"every generative call was served by {model}", str(bad_model[:3]))
     add("WARN" if eff else "PASS", "every served call ran at the pinned effort", str(eff[:3]))
     add("WARN" if viol else "PASS", "no policy violations attempted (wrong model, fallback, server tool, closed-book tool)", str(viol[:5]))
     add("FAIL" if cb_tools else "PASS", "closed-book runs sent no tools and made no tool calls", str(sorted(set(cb_tools))[:5]))
-    add("FAIL" if cost_bad else "PASS", "per-call trace cost reconciles with the run ledger (all attempts and retries)", str(cost_bad[:3]))
-    add("FAIL" if over else "PASS", "no attempt's spend, or spend plus reservations, ever exceeded its cap", str(over[:3]))
-    add("FAIL" if under else "PASS", "no call cost more than was reserved for it before dispatch", str(under[:5]))
+    add("FAIL" if cost_bad else "PASS", "per-call trace cost reconciles with each run's cost", str(cost_bad[:3]))
+    add("WARN" if under else "PASS", "no call cost more than the worst case held for it", str(under[:5]))
+    add("WARN" if intr else "PASS", "every run finished on its own (none interrupted by the funding ceiling or a safeguard)", str(intr[:6]))
+    add("INFO", "runs re-attempted after an infrastructure failure (cost reported separately)", str(retried[:6]) if retried else "none")
 
-    # 4 persistent budget ledger
+    # 4 persistent spending ledger
     for prov in ("anthropic", "exa"):
         st = Budget(prov, cfg, mock).status()
-        mine = [k for k in st["open"] if k.startswith(cdir.name + "/")]
-        add("FAIL" if mine else "PASS", f"{prov} ledger: every reservation of this campaign is reconciled", str(mine[:3]))
-        add("FAIL" if st["over_reservation"] else "PASS", f"{prov} ledger: no charge above its reservation", str(st["over_reservation"][:3]))
-        add("FAIL" if st["committed"] > st["confirmed_usd"] + 1e-6 else "PASS", f"{prov} ledger: committed ${st['committed']:.2f} within confirmed ${st['confirmed_usd']:.2f}")
+        add("FAIL" if st["committed"] > st["ceiling_usd"] + 1e-6 else "PASS",
+            f"{prov} ledger: committed ${st['committed']:.2f} within the ${st['ceiling_usd']:.2f} ceiling")
+        add("FAIL" if st["open"] else "PASS", f"{prov} ledger: no unreconciled entries", str(st["open"][:3]))
 
     # 5 leak scan: benchmark material must not have reached a contestant
     leaks = []

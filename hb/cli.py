@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from . import analysis, datasets, grading, runner, verify as V
-from .budget import Budget, BudgetRefused, plan_check
+from .budget import Budget
 from .util import ROOT, campaign_dir, git_state, load_config, read_json, read_jsonl, secret, sha256_text
 
 SYSTEMS = "closed_book,plain_tools,gpt_researcher,deepagents,hyperresearch"
@@ -38,10 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("prepare", "plan", "funding"):
         sub.add_parser(name)
-    s = sub.add_parser("budget"); s.add_argument("--mock", action="store_true"); s.add_argument("--release"); s.add_argument("--provider", default="anthropic")
+    s = sub.add_parser("budget"); s.add_argument("--mock", action="store_true"); s.add_argument("--provider", default="anthropic")
     s = sub.add_parser("preflight"); s.add_argument("--paid", action="store_true")
     s = sub.add_parser("schedule"); s.add_argument("campaign"); s.add_argument("--split", required=True, choices=["smoke", "main"])
     s.add_argument("--systems", default=SYSTEMS); s.add_argument("--limit", type=int); s.add_argument("--mock", action="store_true")
+    s.add_argument("--tasks", help="smoke retests only: comma-separated task ids from the split")
     s = sub.add_parser("run"); s.add_argument("campaign"); s.add_argument("--mock", action="store_true"); s.add_argument("--workers", type=int, default=2)
     s.add_argument("--only", help="run only these configurations now (comma-separated); the rest stay scheduled")
     s = sub.add_parser("grade"); s.add_argument("campaign"); s.add_argument("--mock", action="store_true")
@@ -64,10 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "funding":
         return funding(cfg)
     if a.cmd == "budget":
-        b = Budget(a.provider, cfg, a.mock)
-        if a.release:
-            b.release(a.release, "released by operator")
-        print(json.dumps(b.status(), indent=2)); return 0
+        print(json.dumps(Budget(a.provider, cfg, a.mock).status(), indent=2)); return 0
     if a.cmd == "preflight":
         return preflight(cfg, a.paid)
     if a.cmd == "validate-graders":
@@ -80,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     cdir = campaign_dir(cfg, a.campaign)
     if a.cmd == "schedule":
         cdir.mkdir(parents=True, exist_ok=True)
-        rows = runner.build_manifest(cfg, cdir, a.split, a.systems.split(","), a.limit, a.mock)
+        rows = runner.build_manifest(cfg, cdir, a.split, a.systems.split(","), a.limit, a.mock, a.tasks.split(",") if a.tasks else None)
         print(f"froze {len(rows)} scheduled runs ({len({r['task_id'] for r in rows})} questions x {len(a.systems.split(','))} configurations) "
               f"in {cdir / 'manifest.jsonl'}; pool={a.split}; commit={git_state()['commit']}"); return 0
     if a.cmd == "run":
@@ -128,30 +126,23 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def plan(cfg: dict) -> int:
-    sp = datasets.load_splits()["splits"]
-    n_cb = sum(s["budget"] == "closed_book" for s in cfg["systems"].values())
-    n_rs = sum(s["budget"] == "research" for s in cfg["systems"].values())
-    cb, rs = cfg["budget"]["closed_book"]["max_cost_usd"], cfg["budget"]["research"]["max_cost_usd"]
-    per_q = n_cb * cb + n_rs * rs
-    a = cfg["funding"]["anthropic"]
-    p = cfg["pricing"]["contestant"]
-    print(f"configurations: {len(cfg['systems'])} ({n_cb} closed-book at ${cb:.2f}, {n_rs} research at ${rs:.2f})  -> ${per_q:.2f} per question")
-    print(f"main : {len(sp['main'])} questions x {len(cfg['systems'])} = {len(sp['main']) * len(cfg['systems'])} scored outputs, reserve ${len(sp['main']) * per_q:.2f} of pool ${a['pools']['main']:.2f}")
-    print(f"smoke: {len(sp['smoke'])} questions x {len(cfg['systems'])} = {len(sp['smoke']) * len(cfg['systems'])} unscored outputs, reserve ${len(sp['smoke']) * per_q:.2f} of pool ${a['pools']['smoke']:.2f}")
-    print(f"buffer: ${a['pools']['buffer']:.2f} (paid preflight, one infrastructure retry per run at most, contingency) = at most "
-          f"{int(a['pools']['buffer'] // rs)} research-run retries")
-    conf = cfg["confirmed_funding"].get("anthropic", 0.0)
-    print(f"total pools ${sum(a['pools'].values()):.2f}; planned ${a['planned_usd']:.2f}; confirmed available ${conf:.2f} (configs/funding.local.toml)")
-    if conf < a["pools"]["smoke"] + a["pools"]["main"]:
-        print(f"NOTE: with ${conf:.2f} confirmed, smoke can run now; scheduling the main set needs its full ${a['pools']['main']:.2f} "
-              f"still reservable at that point.")
-    print(f"closed-book output allowance: {cfg['systems']['closed_book']['max_tokens']} tokens = ${cfg['systems']['closed_book']['max_tokens'] * p['output'] / 1e6:.2f} at list price")
-    r = cfg["budget"]["research"]
-    print(f"research run: tools stop at ${rs - r['final_reserve_usd']:.2f}, ${r['final_reserve_usd']:.2f} kept for the report "
-          f"(about {int(r['final_reserve_usd'] / p['output'] * 1e6 * 0.8)} output tokens after input); Exa cap ${r['max_tool_cost_usd']:.2f}/run")
-    probs = plan_check(cfg)
-    print("arithmetic: " + ("OK" if not probs else "PROBLEMS\n  " + "\n  ".join(probs)))
-    return 1 if probs else 0
+    sp = datasets.load_splits()
+    n_sys = len(cfg["systems"])
+    main, smoke = sp["splits"]["main"], sp["splits"]["smoke"]
+    print(f"configurations: {n_sys} ({', '.join(cfg['systems'])})")
+    print(f"main : {len(main)} questions x {n_sys} = {len(main) * n_sys} scored outputs, one run each")
+    print(f"smoke: {len(smoke)} questions x {n_sys} = {len(smoke) * n_sys} unscored outputs")
+    if sp.get("main_12_fallback"):
+        print(f"fallback main set if 15 is not affordable: {len(sp['main_12_fallback']['tasks'])} questions (pre-selected, same domains)")
+    print("per-run dollar caps: none. Runs follow their workflow to completion.")
+    g = cfg["safeguards"]
+    print(f"safeguards (hang/runaway only): {g['max_wall_seconds'] / 3600:.0f} h wall, {g['max_llm_calls']} model calls, "
+          f"{g['max_tool_calls']} research calls, {g['max_consecutive_llm_errors']} consecutive model errors")
+    for prov in ("anthropic", "exa", "jev"):
+        st = Budget(prov, cfg).status()
+        print(f"{prov:9} ceiling ${st['ceiling_usd']:.2f}  committed ${st['committed']:.2f}  remaining ${st['remaining_vs_ceiling']:.2f} "
+              f"(vs confirmed in account: ${st['remaining_vs_confirmed']:.2f})  by category {st['by_category']}")
+    return 0
 
 
 def funding(cfg: dict) -> int:
@@ -168,7 +159,7 @@ def funding(cfg: dict) -> int:
     a = cfg["funding"]["anthropic"]
     cf = cfg["confirmed_funding"]
     print(f"  balance: NOT readable with a standard API key. Read it in the Console (Billing), then set it in configs/funding.local.toml.")
-    print(f"  ledger limit in force: ${cf.get('anthropic', 0):.2f} confirmed of ${a['planned_usd']:.2f} planned; auto-reload must stay off")
+    print(f"  limits in force: ceiling ${a['ceiling_usd']:.2f}, confirmed in account ${cf.get('anthropic', 0):.2f}; auto-reload must stay off")
     print("Jev (TypeSafe):")
     k = secret("TYPESAFE_API_KEY")
     if not k:
@@ -189,8 +180,9 @@ def funding(cfg: dict) -> int:
     print(f"  environment check: {astra_cli.environment_problem(cfg['judges']['astra']) or 'ok'}")
     print("  remaining credits: not readable without starting a session. Measured on the first smoke grading session.")
     for prov in ("anthropic", "jev", "exa"):
-        s = Budget(prov, cfg).status()
-        print(f"ledger {prov}: committed ${s['committed']:.2f}, headroom ${s['headroom_vs_confirmed']:.2f}, open reservations {len(s['open'])}")
+        st = Budget(prov, cfg).status()
+        print(f"ledger {prov}: committed ${st['committed']:.2f}, remaining under ceiling ${st['remaining_vs_ceiling']:.2f}, "
+              f"under confirmed ${st['remaining_vs_confirmed']:.2f}")
     return 0
 
 
@@ -208,60 +200,39 @@ def preflight(cfg: dict, paid: bool) -> int:
     print(f"{'ok     ' if prob is None else 'PROBLEM'}  codex CLI            Astra judge ({prob or cfg['judges']['astra']['cli_version']})")
     g = git_state()
     print(f"tasks prepared: {datasets.PUBLIC.exists()}   git commit: {g['commit']}  dirty: {g['dirty']}  tags: {g['tags']}")
-    probs = plan_check(cfg)
-    print("plan arithmetic: " + ("OK" if not probs else "; ".join(probs)))
     if not paid:
-        print("\n(no paid calls made; --paid makes one small Fable call and one Jev call, reserved from the buffer pool first)")
-        return 0 if ok and not probs else 1
+        print("\n(no paid calls made; --paid makes one small Fable call and one Jev call, recorded in the ledger)")
+        return 0 if ok else 1
     import anthropic, typesafe_sdk as ts
     b, key = Budget("anthropic", cfg), f"preflight/{int(__import__('time').time())}"
-    try:
-        b.reserve("buffer", key, 0.05)
-    except BudgetRefused as e:
-        raise SystemExit(str(e))
-    cost = 0.05  # if the call fails before usage is known, keep the full reservation as spent
-    try:
-        m = anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"), max_retries=0).messages.create(
-            model=cfg["model"]["id"], max_tokens=600, output_config={"effort": "low"}, messages=[{"role": "user", "content": "Reply with OK."}])
-        p = cfg["pricing"]["contestant"]
-        cost = (m.usage.input_tokens * p["input"] + m.usage.output_tokens * p["output"]) / 1e6
-        print(f"anthropic served by: {m.model} | stop: {m.stop_reason} | cost ${cost:.4f}")
-    finally:
-        b.reconcile(key, cost)
-    jb = Budget("jev", cfg)
-    jb.reserve("grading", key, 0.001)
+    if b.remaining() < 0.05:
+        raise SystemExit("the Anthropic ceiling leaves no room for a preflight call")
+    m = anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"), max_retries=0).messages.create(
+        model=cfg["model"]["id"], max_tokens=600, output_config={"effort": "low"}, messages=[{"role": "user", "content": "Reply with OK."}])
+    p = cfg["pricing"]["contestant"]
+    cost = (m.usage.input_tokens * p["input"] + m.usage.output_tokens * p["output"]) / 1e6
+    b.spend("preflight", key, cost)
+    print(f"anthropic served by: {m.model} | stop: {m.stop_reason} | cost ${cost:.4f}")
     j = ts.TypeSafeClient(api_key=secret("TYPESAFE_API_KEY")).system_one(
         "The sky is blue.", {"v": ts.Choice(instructions="Is the statement about colour?", criteria={"yes": None, "no": None})},
         model=cfg["judges"]["jev"]["model"])
-    jb.reconcile(key, (j.usage.input_tokens or 0) * cfg["pricing"]["jev"]["input"] / 1e6)
+    Budget("jev", cfg).spend("preflight", key, (j.usage.input_tokens or 0) * cfg["pricing"]["jev"]["input"] / 1e6)
     print("typesafe served by:", j.model, "| choice:", j.answers["v"].choice)
     print("Exa and the Codex CLI are first exercised by the smoke campaign, inside its own reservations.")
     return 0
 
 
 def feasibility(cfg: dict, cdir) -> int:
-    """Measured, not assumed: does each configuration produce a report inside its cap?"""
-    res = read_json(cdir / "results.json")
-    if res["mock"]:
-        print("NOTE: mock data; this shows the format only.")
-    print(f"{'system':16}{'runs':>5}{'report':>7}{'mean $':>8}{'max $':>8}{'cap $':>7}{'at cap':>7}{'Exa $/run':>10}{'statuses'}")
-    worst = []
-    for name, t in res["summary"]["systems"].items():
-        cap = cfg["budget"][cfg["systems"][name]["budget"]]["max_cost_usd"]
-        rs = [r for r in res["runs"] if r["system"] == name and r["status"] != "not_run"]
-        at_cap = sum(r["status"] == "budget_exhausted" or r["cost_usd"] >= 0.97 * cap for r in rs)
-        print(f"{name:16}{len(rs):>5}{t['with_report']:>7}{(t['means']['cost_usd'] or 0):>8.2f}{(t['cost_usd_max'] or 0):>8.2f}{cap:>7.2f}{at_cap:>7}"
-              f"{(t['exa_usd_total'] / max(1, len(rs))):>10.3f}  {t['status_counts']}")
-        if t["with_report"] < len(rs):
-            worst.append(name)
-    n = cfg["sampling"]["main"]
-    proj = sum((t["means"]["cost_usd"] or 0) * n for t in res["summary"]["systems"].values())
-    print(f"\nprojected main generation at these means: ${proj:.2f} (the ledger reserves the full ${cfg['funding']['anthropic']['pools']['main']:.2f} regardless)")
-    if worst:
-        print(f"NOT FEASIBLE AS CONFIGURED for: {', '.join(worst)} (a run ended without a report). Do not start the main set. "
-              "See docs/RUNBOOK.md, 'If a configuration does not fit'.")
-        return 1
-    print("every run produced a report inside its cap on the smoke questions. Two questions show operational feasibility only.")
+    """Measured cost, latency and completion per run of a finished campaign. Needs no grading."""
+    rows = []
+    for mp in sorted(cdir.glob("outputs/*/meta.json")):
+        m = read_json(mp)
+        l = m["ledger"]
+        rows.append((m["system"], m["task_id"], m["status"], m["report_chars"], l["cost_usd"], l["tool_cost_usd"], m["wall_s"],
+                     l["llm_calls"], l["llm_errors"], sum(l["tool_calls"].values()), l["tool_errors"], m["attempts"], m.get("interrupted")))
+    print(f"{'system':15}{'task':11}{'status':26}{'report':>7}{'model $':>9}{'exa $':>7}{'total $':>9}{'min':>7}{'calls':>6}{'errs':>5}{'tools':>6}{'t.err':>6}{'tries':>6}  interrupted")
+    for r in sorted(rows):
+        print(f"{r[0]:15}{r[1]:11}{r[2]:26}{r[3]:>7}{r[4]:>9.2f}{r[5]:>7.2f}{r[4] + r[5]:>9.2f}{r[6] / 60:>7.1f}{r[7]:>6}{r[8]:>5}{r[9]:>6}{r[10]:>6}{r[11]:>6}  {r[12] or ''}")
     return 0
 
 
