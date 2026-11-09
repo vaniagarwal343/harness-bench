@@ -48,7 +48,7 @@ Pass conditions:
 The smoke questions are never scored and never used to tune contestant prompts. A single configuration can be re-tested on one question with `hb schedule <name> --split smoke --systems <system> --tasks <task id>`.
 
 ### Before the main campaign
-Use the measured smoke costs to estimate the main campaign (`hb feasibility` per campaign, `hb plan` for what remains under the ceiling). If the estimate with contingency does not fit, the pre-selected 12-question set in `configs/splits.json` is used instead of 15, recorded as an amendment before any main output exists. Per-run caps are not reintroduced to make it fit.
+Use the measured smoke costs to estimate the main campaign (`hb feasibility` per campaign, `hb plan` for what remains under the ceiling). If the estimate does not fit under the ceiling, stop and report the projected shortfall to the study owner. The question set, the configurations and the absence of per-run caps are not changed to make it fit.
 
 ## 3. Grader checks (Jev cents; Astra about 140 CLI sessions)
 

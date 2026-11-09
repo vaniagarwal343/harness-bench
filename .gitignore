@@ -12,4 +12,3 @@ budget/
 export/REVIEW.md
 export/REVIEW.diff
 *.egg-info/
-adapters/.venv-hyperresearch/

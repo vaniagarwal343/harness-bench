@@ -146,7 +146,7 @@ def run_subprocess(question: str, scfg: dict, led: Ledger, gw: Gateway, cfg: dic
         "HB_GATEWAY_URL": gw.url, "HB_RUN_TOKEN": led.token, "HB_MODEL": cfg["model"]["id"],
         "HB_EFFORT": scfg.get("effort", cfg["model"]["effort"]),
         "HB_QUESTION_FILE": str(work / "question.txt"), "HB_REPORT_FILE": str(work / "report.md"),
-        "HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "HOME": str(home),
         **{k: str(v).format(gateway=gw.url, token=led.token, model=cfg["model"]["id"], work=work, root=ROOT)
            for k, v in scfg.get("env", {}).items()},
     })

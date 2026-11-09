@@ -14,8 +14,6 @@ Cost and time are outcomes to be measured, not limits imposed in advance. System
 
 ## 2. Configurations
 
-Hyperresearch (Claude Code) was integrated and smoke-tested but is not part of this round: its full pipeline's cost per question on this model was several times that of the other systems combined, which the round's funding could not cover across the question set. That decision was made from smoke-test cost alone, before any scored output existed.
-
 | | Configuration | What it is |
 |---|---|---|
 | A | Closed-book | One Messages API call in a fresh context. No search, browsing, retrieval, code execution, sub-agents or other tools. |

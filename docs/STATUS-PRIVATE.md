@@ -1,6 +1,5 @@
 # Private status notes (not exported)
 
-Written 2026-11-09 after the round-1 revision. `docs/AUDIT.md` is also private and is unchanged from the first pass; its DRACO, Hyperresearch and Tavily references describe the earlier plan.
 
 ## Verified so far
 - Offline: 26 tests; full mock pipeline for all four configurations; grader validation and diagnostics against the real RuVerBench files with mock judges.

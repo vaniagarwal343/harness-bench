@@ -133,7 +133,7 @@ def plan(cfg: dict) -> int:
     print(f"main : {len(main)} questions x {n_sys} = {len(main) * n_sys} scored outputs, one run each")
     print(f"smoke: {len(smoke)} questions x {n_sys} = {len(smoke) * n_sys} unscored outputs")
     if sp.get("main_12_fallback"):
-        print(f"fallback main set if 15 is not affordable: {len(sp['main_12_fallback']['tasks'])} questions (pre-selected, same domains)")
+        print(f"pre-selected smaller set, by explicit owner decision only: {len(sp['main_12_fallback']['tasks'])} questions")
     print("per-run dollar caps: none. Runs follow their workflow to completion.")
     g = cfg["safeguards"]
     print(f"safeguards (hang/runaway only): {g['max_wall_seconds'] / 3600:.0f} h wall, {g['max_llm_calls']} model calls, "

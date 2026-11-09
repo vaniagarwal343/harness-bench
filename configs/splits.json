@@ -63,7 +63,7 @@
     ]
   },
   "main_12_fallback": {
-    "rule": "used only if 15 questions are not affordable: every domain keeps one question; two of the five two-question domains, chosen by a seeded shuffle, keep both",
+    "rule": "pre-selected smaller set; used only by an explicit owner decision recorded as an amendment, never automatically",
     "seed": "harness-bench-2026-11:main12",
     "selected_on": "2026-11-09",
     "selected_before_any_main_output": true,
