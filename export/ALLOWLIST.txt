@@ -11,6 +11,7 @@ docs/FREEZE.md
 amendments/README.md
 configs/study.toml
 configs/splits.json
+configs/funding.example.toml
 hb/__init__.py
 hb/__main__.py
 hb/analysis.py

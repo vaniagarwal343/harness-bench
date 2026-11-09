@@ -29,7 +29,8 @@ class BudgetRefused(Exception):
 class Budget:
     def __init__(self, provider: str, cfg: dict, mock: bool = False):
         f = cfg["funding"][provider]
-        self.provider, self.pools, self.confirmed = provider, dict(f["pools"]), float(f["confirmed_usd"])
+        # No confirmed amount on file means nothing may be spent with that provider.
+        self.provider, self.pools, self.confirmed = provider, dict(f["pools"]), float(cfg.get("confirmed_funding", {}).get(provider, 0.0))
         self.path = ROOT / "budget" / f"{provider}{'.mock' if mock else ''}.jsonl"
         self._tl = threading.Lock()
 
@@ -78,7 +79,7 @@ class Budget:
                 raise BudgetRefused(f"{self.provider}/{pool}: ${pc:.2f} committed of ${self.pools[pool]:.2f}; cannot reserve ${amount:.2f}")
             if tc + amount > self.confirmed + 1e-9:
                 raise BudgetRefused(f"{self.provider}: ${tc:.2f} committed of ${self.confirmed:.2f} confirmed funding; "
-                                    f"cannot reserve ${amount:.2f}. Raise funding.{self.provider}.confirmed_usd only after the money is in the account.")
+                                    f"cannot reserve ${amount:.2f}. Raise {self.provider}.confirmed_usd in configs/funding.local.toml only after the money is in the account.")
             return None, dict(op="reserve", pool=pool, key=key, amount=round(amount, 6))
         self._locked(fn)
 

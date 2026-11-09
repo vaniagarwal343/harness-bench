@@ -42,7 +42,7 @@ def build_manifest(cfg: dict, cdir: Path, split: str, systems: list[str], limit:
         need = cfg["funding"]["anthropic"]["pools"]["main"]
         if st["headroom_vs_confirmed"] < need:
             raise SystemExit(f"the main set needs ${need:.2f} reservable but confirmed funding leaves ${st['headroom_vs_confirmed']:.2f}. "
-                             "Confirm the top-up in the Console and raise funding.anthropic.confirmed_usd (a config change, so re-freeze).")
+                             "Confirm the balance in the Console and update configs/funding.local.toml.")
     tasks = load_public()
     ids = load_splits()["splits"][split][: limit or None]
     rng = random.Random(f"{cfg['sampling']['seed']}:{split}:{cdir.name}")

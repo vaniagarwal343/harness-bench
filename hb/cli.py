@@ -139,10 +139,11 @@ def plan(cfg: dict) -> int:
     print(f"smoke: {len(sp['smoke'])} questions x {len(cfg['systems'])} = {len(sp['smoke']) * len(cfg['systems'])} unscored outputs, reserve ${len(sp['smoke']) * per_q:.2f} of pool ${a['pools']['smoke']:.2f}")
     print(f"buffer: ${a['pools']['buffer']:.2f} (paid preflight, one infrastructure retry per run at most, contingency) = at most "
           f"{int(a['pools']['buffer'] // rs)} research-run retries")
-    print(f"total pools ${sum(a['pools'].values()):.2f}; planned ${a['planned_usd']:.2f}; confirmed in account ${a['confirmed_usd']:.2f}")
-    if a["confirmed_usd"] < a["pools"]["smoke"] + a["pools"]["main"]:
-        print(f"NOTE: with ${a['confirmed_usd']:.2f} confirmed, smoke can run now; the main set needs ${a['pools']['smoke'] + a['pools']['main']:.2f} "
-              f"confirmed before all of it can be reserved.")
+    conf = cfg["confirmed_funding"].get("anthropic", 0.0)
+    print(f"total pools ${sum(a['pools'].values()):.2f}; planned ${a['planned_usd']:.2f}; confirmed available ${conf:.2f} (configs/funding.local.toml)")
+    if conf < a["pools"]["smoke"] + a["pools"]["main"]:
+        print(f"NOTE: with ${conf:.2f} confirmed, smoke can run now; scheduling the main set needs its full ${a['pools']['main']:.2f} "
+              f"still reservable at that point.")
     print(f"closed-book output allowance: {cfg['systems']['closed_book']['max_tokens']} tokens = ${cfg['systems']['closed_book']['max_tokens'] * p['output'] / 1e6:.2f} at list price")
     r = cfg["budget"]["research"]
     print(f"research run: tools stop at ${rs - r['final_reserve_usd']:.2f}, ${r['final_reserve_usd']:.2f} kept for the report "
@@ -164,8 +165,9 @@ def funding(cfg: dict) -> int:
         r = httpx.get(f"https://api.anthropic.com/v1/models/{cfg['model']['id']}", headers={"x-api-key": k, "anthropic-version": "2023-06-01"}, timeout=30)
         print(f"  key valid and model visible: {r.status_code == 200} (HTTP {r.status_code}, free metadata call)")
     a = cfg["funding"]["anthropic"]
-    print(f"  balance: NOT readable with a standard API key. Read it in the Console (Billing), then set funding.anthropic.confirmed_usd.")
-    print(f"  ledger limit in force: ${a['confirmed_usd']:.2f} confirmed of ${a['planned_usd']:.2f} planned; auto-reload must stay off")
+    cf = cfg["confirmed_funding"]
+    print(f"  balance: NOT readable with a standard API key. Read it in the Console (Billing), then set it in configs/funding.local.toml.")
+    print(f"  ledger limit in force: ${cf.get('anthropic', 0):.2f} confirmed of ${a['planned_usd']:.2f} planned; auto-reload must stay off")
     print("Jev (TypeSafe):")
     k = secret("TYPESAFE_API_KEY")
     if not k:
@@ -174,10 +176,10 @@ def funding(cfg: dict) -> int:
         r = httpx.get("https://api.typesafe.ai/v1/models", headers={"Authorization": f"Bearer {k}"}, timeout=30)
         pinned = cfg["judges"]["jev"]["model"] in r.text
         print(f"  key valid: {r.status_code == 200} (HTTP {r.status_code}); pinned {cfg['judges']['jev']['model']} listed: {pinned}")
-    print(f"  balance: read it in the TypeSafe console. Ledger limit in force: ${cfg['funding']['jev']['confirmed_usd']:.2f}")
+    print(f"  balance: read it in the TypeSafe console. Ledger limit in force: ${cf.get('jev', 0):.2f}")
     print("Exa:")
     print(f"  key: {'set' if secret('EXA_API_KEY') else 'MISSING'} (no free validity or balance endpoint; balance needs a team service key)")
-    print(f"  balance: read it in the Exa dashboard. Ledger limit in force: ${cfg['funding']['exa']['confirmed_usd']:.2f} (provisional)")
+    print(f"  balance: read it in the Exa dashboard. Ledger limit in force: ${cf.get('exa', 0):.2f} (provisional)")
     print("Astra (Codex CLI):")
     from . import astra_cli
     r = subprocess.run(["codex", "login", "status"], capture_output=True, text=True)

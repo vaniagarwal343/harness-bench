@@ -123,7 +123,7 @@ def test_benchmark_sources_are_filtered_and_a_closed_token_is_dead(gw, tmp_path)
 
 def _budget(tmp_path, monkeypatch, confirmed=210.0):
     monkeypatch.setattr(budget, "ROOT", tmp_path)
-    cfg = dict(CFG, funding=dict(CFG["funding"], anthropic=dict(CFG["funding"]["anthropic"], confirmed_usd=confirmed)))
+    cfg = dict(CFG, confirmed_funding=dict(CFG["confirmed_funding"], anthropic=confirmed))
     return budget.Budget("anthropic", cfg), cfg
 
 
@@ -142,6 +142,13 @@ def test_pools_do_not_borrow_and_confirmed_funding_is_a_hard_limit(tmp_path, mon
     again = budget.Budget("anthropic", cfg)  # a new process sees the same state
     st = again.status()
     assert abs(st["committed"] - (24 + 45 * 4 + 1.25 + 4)) < 1e-6 and len(st["open"]) == 6 + 46 and not st["over_reservation"]
+
+
+def test_no_confirmed_funding_on_file_means_nothing_can_be_reserved(tmp_path, monkeypatch):
+    monkeypatch.setattr(budget, "ROOT", tmp_path)
+    b = budget.Budget("anthropic", dict(CFG, confirmed_funding={}))
+    with pytest.raises(budget.BudgetRefused, match="confirmed funding"):
+        b.reserve("smoke", "x", 1.0)
 
 
 def test_plan_arithmetic_matches_the_agreed_counts():
@@ -240,7 +247,7 @@ def test_quota_error_never_becomes_a_grade_and_grading_pauses(tmp_path, monkeypa
 def test_jev_spend_is_reserved_first_and_stops_at_its_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(budget, "ROOT", tmp_path)
     tasks, cdir = _campaign(tmp_path)
-    tiny = dict(CFG, funding=dict(CFG["funding"], jev=dict(confirmed_usd=0.004, pools=dict(grading=0.004))))
+    tiny = dict(CFG, confirmed_funding=dict(CFG["confirmed_funding"], jev=0.004))
     stats = grading.grade(tiny, cdir, tasks, ["jev"], mock=True)
     assert stats["jev"].get("ok", 0) >= 1 and sum(stats["jev"].values()) == 2
     assert budget.Budget("jev", tiny, mock=True).status()["committed"] <= 0.004

@@ -1,0 +1,8 @@
+# Copy to configs/funding.local.toml (git-ignored in the public export, never part of the frozen configuration).
+# Enter what each provider's console shows as available. With no amount on file, nothing can be spent there.
+[anthropic]
+confirmed_usd = 0.0
+[jev]
+confirmed_usd = 0.0
+[exa]
+confirmed_usd = 0.0

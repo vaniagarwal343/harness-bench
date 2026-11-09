@@ -8,6 +8,7 @@ Order matters. Steps 1 to 4 spend from the smoke and buffer pools only. The main
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e . pytest
 bash adapters/setup.sh all                 # pinned harness installs, each in its own environment
 cp .env.example .env                       # fill in three keys
+cp configs/funding.example.toml configs/funding.local.toml   # then enter confirmed balances
 .venv/bin/python -m pytest -q              # offline tests
 .venv/bin/python -m hb prepare             # pinned download, hash check, selection check
 .venv/bin/python scripts/reproduce_selection.py
@@ -15,7 +16,7 @@ cp .env.example .env                       # fill in three keys
 .venv/bin/python -m hb funding             # free checks; says what must be read in each provider console
 ```
 
-Confirm in each provider's console that automatic top-up is off. Set `funding.*.confirmed_usd` in `configs/study.toml` to what is actually in each account.
+Confirm in each provider's console that automatic top-up is off. Record what is actually available at each provider in `configs/funding.local.toml` (kept out of the frozen configuration).
 
 ## 1. Paid preflight (cents, buffer pool)
 
@@ -78,7 +79,7 @@ Publishing the frozen export is described in `docs/FREEZE.md`.
 
 ## 5. Main (20 questions x 4 configurations, main pool, at most $260)
 
-Requires `funding.anthropic.confirmed_usd` to cover the main pool, a clean tree and the freeze tag.
+Requires confirmed funding that covers the main pool, a clean tree and the freeze tag.
 
 ```bash
 .venv/bin/python -m hb schedule main --split main

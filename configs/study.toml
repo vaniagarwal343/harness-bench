@@ -17,20 +17,21 @@ cache_read = 0.20
 input = 0.042
 output = 0.0
 
-# ------------------------------------------------------------------ funding (hard limits; nothing here buys credits)
+# ------------------------------------------------------------------ funding plan (hard limits; nothing here buys credits)
+# How much is confirmed to be available at each provider is operational state, kept outside this file
+# in configs/funding.local.toml. Commitments can never exceed that amount or the pools below.
 [funding.anthropic]
 planned_usd = 310.0              # total for this round
-confirmed_usd = 210.0            # what is known to be in the account. Raise to 310 only after the top-up is visible in the Console.
 [funding.anthropic.pools]        # a pool can never borrow from another pool
 smoke = 26.0                     # 2 x ($1 + 3 x $4)
 main = 260.0                     # 20 x ($1 + 3 x $4)
 buffer = 24.0                    # paid preflight, infrastructure retries, contingency
 [funding.jev]
-confirmed_usd = 10.0
+planned_usd = 10.0
 [funding.jev.pools]
 grading = 10.0
-[funding.exa]                    # PROVISIONAL: confirm the Exa balance in its dashboard, then set this
-confirmed_usd = 45.0
+[funding.exa]
+planned_usd = 45.0
 [funding.exa.pools]
 research = 45.0                  # 66 research runs x $0.60 per-run cap = $39.60, plus retries
 
@@ -140,7 +141,7 @@ reserve_usd = 0.004              # reserved per call before dispatch
 [judges.jev.params]
 question_type = "choice"
 
-[judges.astra]                   # GPT-6 Astra through the official Codex CLI on the owner's signed-in account
+[judges.astra]                   # GPT-6 Astra through the official Codex CLI on a signed-in account
 transport = "codex_cli"
 model = "gpt-6-astra"
 cli_version = "codex-cli 0.162.1"

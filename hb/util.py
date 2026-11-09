@@ -72,6 +72,9 @@ def load_config(path: str | Path | None = None) -> dict:
     cfg = tomllib.loads(p.read_text())
     cfg["_path"] = str(p)
     cfg["_sha256"] = sha256_file(p)
+    # Confirmed account funding is operational state: private, outside the frozen file and its hash.
+    fl = p.parent / "funding.local.toml"
+    cfg["confirmed_funding"] = {k: v["confirmed_usd"] for k, v in tomllib.loads(fl.read_text()).items()} if fl.exists() else {}
     return cfg
 
 
