@@ -47,17 +47,23 @@ def _met(row: dict, crit: dict, view: str) -> bool | None:
 
 
 def score_task(criteria: list[dict], met: dict[str, bool | None]) -> dict:
-    def formula(cs: list[dict]) -> float | None:
-        if any(met[c["cid"]] is None for c in cs):
-            return None
+    undefined: list[str] = []
+
+    def formula(cs: list[dict], name: str = "total") -> float | None:
         pos = sum(c["weight"] for c in cs if c["weight"] > 0)
-        return None if pos <= 0 else sum(c["weight"] for c in cs if met[c["cid"]]) / pos
+        if pos <= 0:  # this task has no positive-weight criterion of that kind: the metric does not exist for it
+            undefined.append(name)
+            return None
+        if any(met[c["cid"]] is None for c in cs):
+            return None  # a verdict is missing: blocked, not zero
+        return sum(c["weight"] for c in cs if met[c["cid"]]) / pos
 
     out = {"total": formula(criteria)}
     for b in BUCKETS:
-        out[f"adapted_{b}"] = formula([c for c in criteria if c["bucket"] == b])
-    out["adapted_no_citation"] = formula([c for c in criteria if not c["citation_dependent"]])
-    out["adapted_citation_dependent"] = formula([c for c in criteria if c["citation_dependent"]])
+        out[f"adapted_{b}"] = formula([c for c in criteria if c["bucket"] == b], f"adapted_{b}")
+    out["adapted_no_citation"] = formula([c for c in criteria if not c["citation_dependent"]], "adapted_no_citation")
+    out["adapted_citation_dependent"] = formula([c for c in criteria if c["citation_dependent"]], "adapted_citation_dependent")
+    out["undefined"] = undefined
     known = [c for c in criteria if met[c["cid"]] is not None]
     out["errors_present"] = sum(1 for c in known if c["polarity"] < 0 and met[c["cid"]])
     return out
@@ -167,8 +173,11 @@ def summarize(cfg: dict, runs: list[dict]) -> dict:
         rs = [r for r in runs if r["system"] == s]
 
         def mean(view: str, metric: str) -> float | None:
-            vals = [val(r["task_id"], s, view, metric) for r in rs]
-            # every scheduled run counts; a missing score blocks the number instead of shrinking the denominator
+            # every scheduled run counts; a missing score blocks the number instead of shrinking the denominator.
+            # Tasks where the metric does not exist (no such criteria in the rubric) are the only ones left out.
+            vv = "jev" if view == "two_judge_mean" else view
+            keep = [r for r in rs if metric not in ((r.get("scores") or {}).get(vv) or {}).get("undefined", [])]
+            vals = [val(r["task_id"], s, view, metric) for r in keep]
             return None if any(v is None for v in vals) or not vals else float(np.mean(vals))
 
         ran = [r for r in rs if r["status"] != "not_run"]
