@@ -1,0 +1,17 @@
+[project]
+name = "harness-bench"
+version = "0.1.0"
+description = "Same-model deep-research harness comparison: closed-book vs plain tools vs specialised harnesses"
+requires-python = ">=3.12,<3.14"
+dependencies = ["anthropic>=2.7", "openai>=3.48", "typesafe-sdk>=0.7.5", "starlette", "uvicorn", "httpx",
+                "huggingface_hub", "numpy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["hb"]

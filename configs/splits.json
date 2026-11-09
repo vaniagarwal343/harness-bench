@@ -1,0 +1,36 @@
+{
+  "seed": "harness-bench-2026-11",
+  "selected_on": "2026-11-09",
+  "selected_before_any_contestant_output": true,
+  "procedure": "seeded sampler stratified by domain, equal allocation; see scripts/reproduce_selection.py",
+  "dataset": "ScaleAI/researchrubrics@85de3115053d1453ed612caacf4a405edc1ad756",
+  "excluded": {},
+  "splits": {
+    "main": [
+      "rr-605371",
+      "rr-6053bb",
+      "rr-6053c9",
+      "rr-6053d0",
+      "rr-6053f5",
+      "rr-605401",
+      "rr-605407",
+      "rr-605414",
+      "rr-60542a",
+      "rr-605433",
+      "rr-60543e",
+      "rr-605441",
+      "rr-605451",
+      "rr-605469",
+      "rr-60548a",
+      "rr-9af308",
+      "rr-9af316",
+      "rr-9af31b",
+      "rr-9af31d",
+      "rr-9af332"
+    ],
+    "smoke": [
+      "rr-6053f2",
+      "rr-95846f"
+    ]
+  }
+}

@@ -1,0 +1,92 @@
+# Runbook
+
+Order matters. Steps 1 to 4 spend from the smoke and buffer pools only. The main pool cannot be touched until step 6.
+
+## 0. Setup (free)
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e . pytest
+bash adapters/setup.sh all                 # pinned harness installs, each in its own environment
+cp .env.example .env                       # fill in three keys
+.venv/bin/python -m pytest -q              # offline tests
+.venv/bin/python -m hb prepare             # pinned download, hash check, selection check
+.venv/bin/python scripts/reproduce_selection.py
+.venv/bin/python -m hb plan                # counts, caps and pool arithmetic
+.venv/bin/python -m hb funding             # free checks; says what must be read in each provider console
+```
+
+Confirm in each provider's console that automatic top-up is off. Set `funding.*.confirmed_usd` in `configs/study.toml` to what is actually in each account.
+
+## 1. Paid preflight (cents, buffer pool)
+
+```bash
+.venv/bin/python -m hb preflight --paid    # one small Fable call, one Jev call; confirms the model ids that answer
+```
+
+## 2. Smoke test (2 questions x 4 configurations, smoke pool, at most $26)
+
+```bash
+.venv/bin/python -m hb schedule smoke --split smoke
+.venv/bin/python -m hb run smoke --workers 2
+.venv/bin/python -m hb grade smoke --judges astra --limit 1    # first Codex CLI session: check it before continuing
+.venv/bin/python -m hb grade smoke
+.venv/bin/python -m hb results smoke && .venv/bin/python -m hb verify smoke
+.venv/bin/python -m hb feasibility smoke
+.venv/bin/python -m hb budget
+```
+
+After the first Astra session, open its `record.json` under `runs/smoke/grades/astra_sessions/` and confirm: no tool or command items, no tool catalog, no files created, the log names `gpt-6-astra`, and note the credit use it reports. Check the remaining Codex credits in the app before grading the rest.
+
+Pass conditions:
+1. `verify`: every call served by `claude-fable-5-2` at effort high, no policy violations, no call above its reservation, no run above its cap.
+2. No HTTP 400 from model request rules in any `trace.jsonl`.
+3. `feasibility`: every run produced a report inside its cap.
+4. Both judges returned verdicts with no error states left.
+5. One report per configuration read by hand: it is the final answer, not notes.
+
+The smoke questions are never scored and never used to tune contestant prompts.
+
+### If a configuration does not fit
+Do not start the main set. Record the measured numbers from `feasibility`, then choose the smallest change, in this order, and write it as an amendment before freezing:
+1. A uniform change to all research arms: lower `tools.fetch_max_chars` (30,000 to 15,000).
+2. A change to one harness's breadth: GPT Researcher `DEEP_RESEARCH_BREADTH` 3 to 2, then `DEEP_RESEARCH_DEPTH` 2 to 1.
+3. Anything larger (caps, question count, cohort) is a decision for the study owner, with the numbers in hand.
+A second full smoke pass does not fit the buffer pool. Re-test only the configuration that changed, on one smoke question, under a new campaign name.
+
+## 3. Grader checks (Jev cents; Astra about 135 CLI sessions)
+
+```bash
+git clone https://github.com/THU-KEG/RuVerBench ../RuVerBench
+git -C ../RuVerBench checkout 0af0256870d6322490c7ab15eb6370779b898a37
+.venv/bin/python -m hb diagnostics
+.venv/bin/python -m hb validate-graders --ruverbench ../RuVerBench --split dev
+.venv/bin/python -m hb validate-graders --ruverbench ../RuVerBench --split dev --judges astra --astra-mode single
+.venv/bin/python -m hb grade smoke --judges astra --astra-mode single --limit 2
+.venv/bin/python -m hb compare-astra-modes smoke
+#   decide batching by the written rule; adjust judge prompts only here; then freeze
+.venv/bin/python -m hb validate-graders --ruverbench ../RuVerBench --split heldout
+```
+
+## 4. Freeze
+
+```bash
+git add -A && git commit -m "Freeze round 1 protocol, config and selection"
+git tag -a freeze-r1 -m "Round 1 frozen before main outputs"
+python3 scripts/make_export.py             # builds the public export for review; pushes nothing
+```
+Publishing the frozen export is described in `docs/FREEZE.md`.
+
+## 5. Main (20 questions x 4 configurations, main pool, at most $260)
+
+Requires `funding.anthropic.confirmed_usd` to cover the main pool, a clean tree and the freeze tag.
+
+```bash
+.venv/bin/python -m hb schedule main --split main
+.venv/bin/python -m hb run main --workers 2
+.venv/bin/python -m hb grade main
+.venv/bin/python -m hb verify main          # before looking at any aggregate
+.venv/bin/python -m hb results main
+.venv/bin/python -m hb review-queue main
+```
+
+`run` and `grade` are resumable. If grading pauses on quota, fix the cause and rerun `grade main --retry-errors`. After manual review, put labels in `runs/main/grades/adjudication.jsonl` and rerun `results` and `verify`.

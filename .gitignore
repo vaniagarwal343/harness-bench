@@ -1,0 +1,14 @@
+.venv/
+adapters/.venv-*/
+adapters/vendor/
+.env
+data/raw/
+data/eval/
+data/public/
+runs/
+__pycache__/
+.pytest_cache/
+budget/
+export/REVIEW.md
+export/REVIEW.diff
+*.egg-info/

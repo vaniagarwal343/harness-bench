@@ -1,0 +1,174 @@
+# harness-bench study configuration, round 1.
+# 4 configurations x 20 main ResearchRubrics questions x 1 run = 80 scored outputs,
+# plus 4 x 2 smoke questions = 8 unscored outputs. 22 questions, 88 outputs before retries.
+# The sha256 of this file is stamped on every manifest, run and result. Changing it after a
+# manifest is frozen makes `hb verify` fail; later changes go in amendments/.
+
+[model]
+id = "claude-fable-5-2"          # every outcome-affecting generative call; the gateway refuses anything else
+effort = "high"                  # pinned in every arm and logged per call
+
+[pricing.contestant]             # USD per 1M tokens, list price. Confirm against the live pricing page before spending.
+input = 8.0
+output = 40.0
+cache_write = 10.0
+cache_read = 0.20
+[pricing.jev]
+input = 0.042
+output = 0.0
+
+# ------------------------------------------------------------------ funding (hard limits; nothing here buys credits)
+[funding.anthropic]
+planned_usd = 310.0              # total for this round
+confirmed_usd = 210.0            # what is known to be in the account. Raise to 310 only after the top-up is visible in the Console.
+[funding.anthropic.pools]        # a pool can never borrow from another pool
+smoke = 26.0                     # 2 x ($1 + 3 x $4)
+main = 260.0                     # 20 x ($1 + 3 x $4)
+buffer = 24.0                    # paid preflight, infrastructure retries, contingency
+[funding.jev]
+confirmed_usd = 10.0
+[funding.jev.pools]
+grading = 10.0
+[funding.exa]                    # PROVISIONAL: confirm the Exa balance in its dashboard, then set this
+confirmed_usd = 45.0
+[funding.exa.pools]
+research = 45.0                  # 66 research runs x $0.60 per-run cap = $39.60, plus retries
+
+# ------------------------------------------------------------------ dataset (pinned, hash-checked)
+[datasets.researchrubrics]
+repo = "ScaleAI/researchrubrics"
+revision = "85de3115053d1453ed612caacf4a405edc1ad756"
+file = "processed_data.jsonl"
+sha256 = "ea2023d03953b70ba4a2f7f1fe490b434f18cec26c4fdb48acc0e3edf3d8edfb"
+
+[sampling]                       # the selection itself is frozen in configs/splits.json (task ids only)
+seed = "harness-bench-2026-11"
+main = 20
+smoke = 2
+excluded = []                    # never "closed-book solved it"
+
+# ------------------------------------------------------------------ per-run caps
+[budget.closed_book]
+max_cost_usd = 1.0
+[budget.research]                # every tool-using arm, across all subagents and retries
+max_cost_usd = 4.0
+final_reserve_usd = 1.0          # research tools stop serving at $3.00 so $1.00 is left to write the report
+max_tool_calls = 150
+max_tool_cost_usd = 0.60         # Exa spend per run
+max_wall_seconds = 3600
+soft_fraction = 0.6              # tool results carry a "budget mostly used" notice from here
+[budget.enforcement]
+bytes_per_token = 3.0            # conservative input estimate used to reserve before dispatch (English is about 4)
+min_output_tokens = 1024         # a call that cannot be afforded this much output is refused instead of sent
+reservation_wait_s = 180         # concurrent subagent calls wait for in-flight reservations to settle before being refused
+
+[execution]
+llm_request_timeout_s = 900
+sdk_max_retries = 2
+infra_retries = 1                # one re-attempt for an infrastructure failure, paid from the buffer pool
+kill_grace_s = 60
+
+[tools]
+backend = "exa"                  # one backend for B, C and D. No fallback backend.
+search_type = "auto"             # Exa retrieval. The synthesising modes (deep*) are not used.
+search_max_results = 5
+snippet_chars = 500              # raw page text. Exa highlights and summaries are model-generated and are not requested.
+fetch_max_chars = 30000          # Exa Contents raw text, cut with a visible marker
+timeout_s = 60
+search_reserve_usd = 0.015       # reserved per search before dispatch; reconciled to Exa's reported cost
+fetch_reserve_usd = 0.002
+blocked_domains = []
+blocked_url_substrings = ["researchrubrics", "2511.07685", "RuVerBench", "research.site"]
+
+[trace]
+store_bodies = true
+
+# ------------------------------------------------------------------ contestants
+[systems.closed_book]            # A
+kind = "closed_book"
+budget = "closed_book"
+effort = "high"
+max_tokens = 20000               # $0.80 of output at list price, leaving room for input under the $1 cap
+
+[systems.plain_tools]            # B
+kind = "plain_tools"
+budget = "research"
+effort = "high"
+max_tokens = 16000               # per call; the gateway lowers it further when the remaining budget is smaller
+compaction = false
+
+[systems.gpt_researcher]         # C, modified configuration (see docs/COHORT.md)
+kind = "subprocess"
+budget = "research"
+command = "{root}/adapters/.venv-gptr/bin/python {root}/adapters/gptr_driver.py"
+shims = ["pin_effort"]
+[systems.gpt_researcher.env]
+RETRIEVER_ARG_TOKEN = "{token}"
+FAST_LLM = "anthropic:{model}"
+SMART_LLM = "anthropic:{model}"
+STRATEGIC_LLM = "anthropic:{model}"
+CONTEXT_FILTER = "keyword"       # explicit; "auto" would enable Jev whenever TYPESAFE_API_KEY is present
+RETRIEVER = "custom"
+RETRIEVER_ENDPOINT = "{gateway}/tools/gptr"
+REPORT_SOURCE = "web"
+DEEP_RESEARCH_BREADTH = "3"      # harness defaults, kept
+DEEP_RESEARCH_DEPTH = "2"
+DEEP_RESEARCH_CONCURRENCY = "4"
+FAST_TOKEN_LIMIT = "8000"        # thinking shares max_tokens, so the stock 4000 would truncate
+STRATEGIC_TOKEN_LIMIT = "8000"
+SMART_TOKEN_LIMIT = "16000"
+SUMMARY_TOKEN_LIMIT = "4000"
+
+[systems.deepagents]             # D, modified configuration
+kind = "subprocess"
+budget = "research"
+command = "{root}/adapters/.venv-deepagents/bin/python {root}/adapters/deepagents_driver.py"
+shims = ["pin_effort"]
+[systems.deepagents.env]
+HB_DEEPAGENTS_EXAMPLE = "{root}/adapters/vendor/deepagents/examples/deep_research"
+HB_MAX_TOKENS = "16000"
+
+# ------------------------------------------------------------------ judges (evaluator process only)
+[judges.jev]
+model = "jev-1.14.0"             # versioned id, never an alias
+max_attempts = 3
+sdk_max_retries = 3
+timeout_s = 60
+concurrency = 6
+allow_long_context = true        # used only after an explicit context-limit error; recorded per judgment
+reserve_usd = 0.004              # reserved per call before dispatch
+[judges.jev.params]
+question_type = "choice"
+
+[judges.astra]                   # GPT-6 Astra through the official Codex CLI on the owner's signed-in account
+transport = "codex_cli"
+model = "gpt-6-astra"
+cli_version = "codex-cli 0.162.1"
+mode = "batch"                   # one fresh session per report, all its criteria. Fixed for every system after the development check.
+max_attempts = 2
+timeout_s = 1200
+concurrency = 2
+[judges.astra.params]
+reasoning_effort = "medium"
+
+[validation]                     # small fixed grader check on RuVerBench ResearchRubrics records (other systems' reports)
+seed = "validation-2026-11"
+dev_reports = 10
+heldout_reports = 30
+
+[review]
+seed = "review-2026-11"
+max_disagreements = 40
+agreement_sample = 20
+heavy_weight = 4                 # |weight| 4-5 is "mandatory" in the ResearchRubrics paper
+
+[analysis]
+closed_book = "closed_book"
+plain = "plain_tools"
+n_boot = 10000
+boot_seed = 20261109
+primary_pairs = [["closed_book", "plain_tools"], ["plain_tools", "gpt_researcher"], ["plain_tools", "deepagents"]]
+
+[freeze]
+require_clean_tagged_commit_for_main = true   # main runs refuse to start from an uncommitted or untagged tree
+tag_prefix = "freeze-"

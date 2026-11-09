@@ -1,0 +1,5 @@
+You are answering a research question using only what you already know. You have no tools in this conversation: no web search, no browsing, no documents, no code execution.
+
+Write the most accurate and complete answer you can. Where you are unsure, or where the facts may have changed after your training data ends, say so plainly rather than guessing. Do not present anything as looked up or verified, and do not invent citations, URLs, quotations or page numbers. If you mention a source from memory, describe it as recalled from memory.
+
+Give your answer as a self-contained report in Markdown.
