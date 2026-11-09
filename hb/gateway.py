@@ -67,6 +67,7 @@ class Ledger:
     tool_errors: int = 0
     tool_cost_usd: float = 0.0
     tool_reserved_usd: float = 0.0
+    budget_refusals: int = 0        # model calls refused because the run's cap could not cover them
     models_seen: dict = field(default_factory=dict)
     efforts_seen: dict = field(default_factory=dict)
     violations: list = field(default_factory=list)
@@ -116,7 +117,7 @@ class Ledger:
     def summary(self) -> dict:
         return dict(llm_calls=self.llm_calls, llm_errors=self.llm_errors, usage=dict(self.usage),
                     cost_usd=round(self.cost_usd, 6), max_committed_usd=round(self.max_committed_usd, 6),
-                    tool_calls=dict(self.tool_calls), tool_errors=self.tool_errors, tool_cost_usd=round(self.tool_cost_usd, 6),
+                    budget_refusals=self.budget_refusals, tool_calls=dict(self.tool_calls), tool_errors=self.tool_errors, tool_cost_usd=round(self.tool_cost_usd, 6),
                     models_seen=dict(self.models_seen), efforts_seen=dict(self.efforts_seen),
                     violations=list(self.violations), gateway_seconds=round(now() - self.started, 2))
 
@@ -314,6 +315,8 @@ class Gateway:
         requested = int(body.get("max_tokens") or 0)
         got = await self._reserve(led, len(raw), requested)
         if isinstance(got, str):
+            with led.lock:
+                led.budget_refusals += 1
             finish(400, None, got)
             return _err(400, got)
         granted, reserve[0] = got

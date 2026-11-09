@@ -171,7 +171,9 @@ def run_subprocess(question: str, scfg: dict, led: Ledger, gw: Gateway, cfg: dic
     elif timed_out:
         status = "timeout"
     else:
-        status = "budget_exhausted" if led.exhausted() else "failed_infra"
+        # A run that ended without a report after the gateway refused a model call for lack of budget is a
+        # budget outcome, not an infrastructure failure, and is not retried.
+        status = "budget_exhausted" if led.budget_refusals else "failed_infra"
     return dict(status=status, report=report, exit_code=code, timed_out=timed_out, wall_s=round(now() - t0, 1))
 
 

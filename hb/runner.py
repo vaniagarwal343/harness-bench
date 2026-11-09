@@ -69,10 +69,10 @@ def canon_splits() -> str:
 
 
 def _sum_ledgers(ledgers: list[dict]) -> dict:
-    out = dict(llm_calls=0, llm_errors=0, cost_usd=0.0, tool_errors=0, tool_cost_usd=0.0, max_committed_usd=0.0,
+    out = dict(llm_calls=0, llm_errors=0, cost_usd=0.0, tool_errors=0, tool_cost_usd=0.0, max_committed_usd=0.0, budget_refusals=0,
                usage={}, tool_calls={}, models_seen={}, efforts_seen={}, violations=[])
     for l in ledgers:
-        for k in ("llm_calls", "llm_errors", "cost_usd", "tool_errors", "tool_cost_usd"):
+        for k in ("llm_calls", "llm_errors", "cost_usd", "tool_errors", "tool_cost_usd", "budget_refusals"):
             out[k] += l[k]
         out["max_committed_usd"] = max(out["max_committed_usd"], l["max_committed_usd"])
         for k in ("usage", "tool_calls", "models_seen", "efforts_seen"):

@@ -70,7 +70,7 @@ def test_a_call_that_cannot_be_afforded_is_refused_before_it_is_sent(gw, tmp_pat
     led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.01)))  # $0.01 cannot pay for 1024 output tokens at $40/M
     with pytest.raises(anthropic.BadRequestError, match="HB_BUDGET_EXHAUSTED"):
         client(gw, led).messages.create(model=MODEL, max_tokens=4000, messages=MSG)
-    assert led.cost_usd == 0 and led.models_seen == {}  # nothing reached the model
+    assert led.cost_usd == 0 and led.models_seen == {} and led.budget_refusals == 1  # nothing reached the model
 
 
 def test_output_allowance_is_lowered_to_what_the_remaining_budget_can_pay(gw, tmp_path):
@@ -317,3 +317,15 @@ def test_missing_or_duplicated_criteria_in_a_batch_are_errors_for_those_items_on
     res = astra_cli.judge("Q?", "The report says A clearly.", crits, CFG["judges"]["astra"], tmp_path, mock=True)
     assert res["items"]["a"]["state"] == "ok" and res["items"]["b"]["state"] == "ok"
     assert json.loads((tmp_path / res["session"]["id"] / "raw_verdicts.json").read_text())["verdicts"]  # original output kept
+
+
+def test_a_harness_that_dies_at_the_cap_is_a_budget_outcome_and_is_not_retried(gw, tmp_path):
+    from hb import systems
+    led = gw.open_run(tmp_path, policy(budget=dict(max_cost_usd=0.01, max_wall_seconds=60)))
+    script = tmp_path / "dies_at_cap.py"
+    script.write_text("import anthropic, os\nanthropic.Anthropic(max_retries=0).messages.create(model=os.environ['HB_MODEL'], "
+                      "max_tokens=4000, messages=[dict(role='user', content='hi')])\n")
+    scfg = dict(kind="subprocess", budget="research", command=f"'{systems.ROOT}/.venv/bin/python' '{script}'")
+    cfg = dict(CFG, budget=dict(CFG["budget"], research=dict(max_cost_usd=0.01, max_wall_seconds=60)))
+    out = systems.run_subprocess("Q?", scfg, led, gw, cfg, tmp_path)
+    assert out["status"] == "budget_exhausted" and out["report"] == ""
