@@ -164,7 +164,7 @@ def test_no_confirmed_funding_on_file_means_nothing_can_be_spent(tmp_path, monke
 
 
 def test_counts_and_absence_of_per_run_caps():
-    assert CFG["sampling"]["main"] == 15 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 5
+    assert CFG["sampling"]["main"] == 15 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 4
     assert "budget" not in CFG and CFG["funding"]["anthropic"]["ceiling_usd"] == 310.0
     assert all("budget" not in s for s in CFG["systems"].values())
 

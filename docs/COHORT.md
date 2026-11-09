@@ -20,11 +20,12 @@ Full dependency pins are in `adapters/gptr.lock.txt` and `adapters/deepagents.lo
 ## Adaptations
 
 ### C. GPT Researcher (modified configuration)
-Set by environment in `configs/study.toml`; no source patch so far.
+Set by environment in `configs/study.toml`, plus one one-line source patch.
 1. `FAST_LLM`, `SMART_LLM`, `STRATEGIC_LLM` set to `anthropic:claude-fable-5-2` (shipped defaults are OpenAI models).
 2. `CONTEXT_FILTER=keyword`, stated explicitly. The shipped default `auto` switches to a third-party scoring model when its API key is present in the environment. The child environment is scrubbed of all provider keys as well.
 3. `RETRIEVER=custom`, pointing at the gateway. Each query becomes one search and one page read per result on the shared backend. This replaces GPT Researcher's own scraper with the common page reader, which is the price of equal research access.
-4. Token limits raised (8k, 8k, 16k, 4k) because the model always thinks and thinking shares the output allowance.
+4. Token limits raised (16k, 16k, 20k, 8k) because the model always thinks and thinking shares the output allowance.
+7. One-line source patch (`adapters/patches/gptr-anthropic-text.patch`): responses from the Anthropic provider are read through the text view, which upstream already uses for another Anthropic-compatible provider. Without it, thinking blocks break its parsers and it gathers nothing (observed in the smoke test).
 5. Driven through the Python API, so the command-line tool's title-generation call is not made.
 6. Effort is set by the gateway (`pin_effort`), since the harness has no setting for it.
 Breadth 3, depth 2 and concurrency 4 are the shipped defaults and are kept.
@@ -33,16 +34,18 @@ Breadth 3, depth 2 and concurrency 4 are the shipped defaults and are kept.
 `adapters/deepagents_driver.py` rebuilds the example's agent from its own prompts, limits and `think_tool`.
 1. Model changed from `claude-sonnet-4-5` at temperature 0.0 to Fable 5.2 with no sampling parameters.
 2. The search tool keeps its upstream name (`tavily_search`, which the example's prompts refer to), its signature and its "search, then return full page text" behaviour, but both steps go through the gateway to the shared backend.
-3. `max_tokens` 16,000 per call. Effort set by the gateway.
+3. `max_tokens` 20,000 per call (the largest the client library permits for non-streamed calls). Effort set by the gateway.
 4. The report is read from the agent's `/final_report.md`; if the orchestrator answers inline instead, the last message is used and that is logged.
 
 ### Differences that remain between arms
 - Report-writing prompts are each system's own. B's prompt is in `prompts/`.
 - C reads 5 pages per query by design; D reads 1; B decides for itself.
-- C and D make uncached calls; B uses prompt caching. Under a dollar cap this changes how much research each can afford, and it is a property of the system as it stands.
+- C makes uncached calls; B, D and E use prompt caching. This affects cost, which is reported per system.
 - D edits its message history when it summarises. C runs many independent short calls.
 
-## E. Hyperresearch (modified configuration, Claude Code runtime)
+## Not in round 1: Hyperresearch (integrated and smoke-tested, then dropped on cost)
+
+Kept here as a record of the integration. The adapter and patch remain in the working repository and are not part of the frozen study.
 
 | | |
 |---|---|
@@ -58,8 +61,7 @@ Adaptations:
 3. **Page reading.** The patch adds a web provider that sends `hyperresearch fetch` and `websearch` to the study gateway, so E uses the same Exa search, page reader, content limit, block list and budget as B, C and D. Upstream's default reader is a local headless browser.
 4. **No direct network.** The session runs in a macOS sandbox that permits network access to the local gateway only. Upstream's academic-API, PDF-download and open-access-rescue lanes therefore fail and fall back to search and fetch. This narrows its sourcing and is the price of equal research access.
 5. **Isolation.** Fresh working directory, home and Claude Code configuration directory per run. The sandbox also denies reading the operator's own Claude Code and Codex folders and the study workspace, so no personal skills, agents, memory or study files can load. The driver checks the session's start-up record and fails the run if any personal skill, agent or MCP server appears. Claude Code's bundled `deep-research` skill is denied.
-6. **Budget note.** The appended note also tells agents to go straight to the final report when the research budget is reported as used.
-7. Effort is set by the gateway (Claude Code asked for `medium`; the study pins `high`), and `max_tokens` is lowered by the gateway when the remaining budget is smaller than the 128,000 Claude Code requests.
-8. The report is the pipeline's own deliverable, `research/notes/final_report_<tag>.md`, with the vault's front matter removed. Drafts and notes are not promoted to a report.
+6. Effort is set by the gateway (Claude Code asked for `medium`; the study pins `high`).
+7. The report is the pipeline's own deliverable, `research/notes/final_report_<tag>.md`, with the vault's front matter removed. Drafts and notes are not promoted to a report.
 
 Tier choice (`light` or `full`) is left to the pipeline, as upstream.

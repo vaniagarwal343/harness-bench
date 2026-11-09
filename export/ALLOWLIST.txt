@@ -30,13 +30,9 @@ hb/verify.py
 adapters/setup.sh
 adapters/gptr_driver.py
 adapters/deepagents_driver.py
-adapters/hyperresearch_driver.py
-adapters/patches/hyperresearch-gateway.patch
 adapters/patches/gptr-anthropic-text.patch
 adapters/gptr.lock.txt
 adapters/deepagents.lock.txt
-adapters/hyperresearch.lock.txt
-adapters/claude-code.version.txt
 scripts/reproduce_selection.py
 scripts/make_export.py
 export/ALLOWLIST.txt

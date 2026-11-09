@@ -1,6 +1,6 @@
 # Runbook
 
-Order matters. Steps 1 to 4 spend from the smoke and buffer pools only. The main pool cannot be touched until step 6.
+Order matters. Runs are not capped individually; the only spending limit is the round's cumulative ceiling, checked with `hb plan` and `hb budget`. Run one campaign at a time.
 
 ## 0. Setup (free)
 
@@ -18,13 +18,13 @@ cp configs/funding.example.toml configs/funding.local.toml   # then enter confir
 
 Confirm in each provider's console that automatic top-up is off. Record what is actually available at each provider in `configs/funding.local.toml` (kept out of the frozen configuration).
 
-## 1. Paid preflight (cents, buffer pool)
+## 1. Paid preflight (cents)
 
 ```bash
 .venv/bin/python -m hb preflight --paid    # one small Fable call, one Jev call; confirms the model ids that answer
 ```
 
-## 2. Smoke test (2 questions x 5 configurations, smoke pool, at most $34)
+## 2. Smoke test (2 questions x 4 configurations, unscored)
 
 ```bash
 .venv/bin/python -m hb schedule smoke --split smoke
@@ -39,20 +39,16 @@ Confirm in each provider's console that automatic top-up is off. Record what is 
 After the first Astra session, open its `record.json` under `runs/smoke/grades/astra_sessions/` and confirm: no tool or command items, no tool catalog, no files created, the log names `gpt-6-astra`, and note the credit use it reports. Check the remaining Codex credits in the app before grading the rest.
 
 Pass conditions:
-1. `verify`: every call served by `claude-fable-5-2` at effort high, no policy violations, no call above its reservation, no run above its cap.
+1. `verify`: every call served by `claude-fable-5-2` at effort high, no policy violations, costs reconcile.
 2. No HTTP 400 from model request rules in any `trace.jsonl`.
-3. `feasibility`: every run produced a report inside its cap.
+3. `feasibility`: every run finished on its own with a report; none interrupted.
 4. Both judges returned verdicts with no error states left.
 5. One report per configuration read by hand: it is the final answer, not notes.
 
-The smoke questions are never scored and never used to tune contestant prompts.
+The smoke questions are never scored and never used to tune contestant prompts. A single configuration can be re-tested on one question with `hb schedule <name> --split smoke --systems <system> --tasks <task id>`.
 
-### If a configuration does not fit
-Do not start the main set. Record the measured numbers from `feasibility`, then choose the smallest change, in this order, and write it as an amendment before freezing:
-1. A uniform change to all research arms: lower `tools.fetch_max_chars` (30,000 to 15,000).
-2. A change to one harness's scale: GPT Researcher `DEEP_RESEARCH_BREADTH` 3 to 2, then `DEEP_RESEARCH_DEPTH` 2 to 1; Hyperresearch pinned to its own built-in `light` tier.
-3. Anything larger (caps, question count, cohort) is a decision for the study owner, with the numbers in hand.
-A second full smoke pass does not fit the buffer pool. Re-test only the configuration that changed, on one smoke question, under a new campaign name.
+### Before the main campaign
+Use the measured smoke costs to estimate the main campaign (`hb feasibility` per campaign, `hb plan` for what remains under the ceiling). If the estimate with contingency does not fit, the pre-selected 12-question set in `configs/splits.json` is used instead of 15, recorded as an amendment before any main output exists. Per-run caps are not reintroduced to make it fit.
 
 ## 3. Grader checks (Jev cents; Astra about 140 CLI sessions)
 
@@ -77,9 +73,9 @@ python3 scripts/make_export.py             # builds the public export for review
 ```
 Publishing the frozen export is described in `docs/FREEZE.md`.
 
-## 5. Main (15 questions x 5 configurations, main pool, at most $255)
+## 5. Main (main question set x 4 configurations)
 
-Requires confirmed funding that covers the main pool, a clean tree and the freeze tag.
+Requires a clean tree and the freeze tag. Check `hb plan` first: what remains under the ceiling should cover the estimate with contingency.
 
 ```bash
 .venv/bin/python -m hb schedule main --split main

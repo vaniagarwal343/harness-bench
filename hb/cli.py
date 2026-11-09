@@ -29,7 +29,7 @@ from . import analysis, datasets, grading, runner, verify as V
 from .budget import Budget
 from .util import ROOT, campaign_dir, git_state, load_config, read_json, read_jsonl, secret, sha256_text
 
-SYSTEMS = "closed_book,plain_tools,gpt_researcher,deepagents,hyperresearch"
+SYSTEMS = "closed_book,plain_tools,gpt_researcher,deepagents"
 
 
 def main(argv: list[str] | None = None) -> int:

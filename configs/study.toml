@@ -1,6 +1,6 @@
 # harness-bench study configuration, round 1.
-# 5 configurations x 15 main ResearchRubrics questions x 1 run = 75 scored outputs,
-# plus 5 x 2 smoke questions = 10 unscored outputs. 17 questions, 85 outputs before retries.
+# 4 configurations x the main ResearchRubrics questions in configs/splits.json x 1 run,
+# plus smoke questions that are never scored.
 # The sha256 of this file is stamped on every manifest, run and result. Changing it after a
 # manifest is frozen makes `hb verify` fail; later changes go in amendments/.
 
@@ -48,7 +48,7 @@ excluded = []                    # never "closed-book solved it"
 # These exist only to stop a hung process or a runaway loop. They sit far above the use seen in smoke
 # runs. A run they interrupt is labelled "safeguard_interrupted" with the reason and is disclosed.
 [safeguards]
-max_wall_seconds = 14400         # 4 hours end to end (Hyperresearch documents 1.5 to 2.5 hours for its full pipeline)
+max_wall_seconds = 14400         # 4 hours end to end; the longest smoke run took 13 minutes
 max_llm_calls = 3000
 max_tool_calls = 5000
 max_consecutive_llm_errors = 30  # e.g. a harness retrying a rejected request forever
@@ -60,7 +60,7 @@ infra_retries = 0                # no automatic re-run: with uncapped runs a rep
 kill_grace_s = 60
 
 [tools]
-backend = "exa"                  # one backend for B, C, D and E. No fallback backend.
+backend = "exa"                  # one backend for B, C and D. No fallback backend.
 search_type = "auto"             # Exa retrieval. The synthesising modes (deep*) are not used.
 search_max_results = 5
 snippet_chars = 500              # raw page text. Exa highlights and summaries are model-generated and are not requested.
@@ -115,22 +115,6 @@ shims = ["pin_effort"]
 HB_DEEPAGENTS_EXAMPLE = "{root}/adapters/vendor/deepagents/examples/deep_research"
 HB_MAX_TOKENS = "20000"          # non-streaming calls: the Anthropic SDK refuses larger allowances without streaming
 
-[systems.hyperresearch]          # E, modified configuration (Claude Code runtime)
-kind = "subprocess"
-command = "{root}/adapters/.venv-hyperresearch/bin/python {root}/adapters/hyperresearch_driver.py"
-shims = ["pin_effort"]
-[systems.hyperresearch.env]
-ANTHROPIC_MODEL = "{model}"
-CLAUDE_CODE_SUBAGENT_MODEL = "{model}"
-ANTHROPIC_DEFAULT_OPUS_MODEL = "{model}"
-ANTHROPIC_DEFAULT_SONNET_MODEL = "{model}"
-ANTHROPIC_DEFAULT_HAIKU_MODEL = "{model}"
-ANTHROPIC_SMALL_FAST_MODEL = "{model}"
-DISABLE_TELEMETRY = "1"
-DISABLE_AUTOUPDATER = "1"
-DISABLE_ERROR_REPORTING = "1"
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
-
 # ------------------------------------------------------------------ judges (evaluator process only)
 [judges.jev]
 model = "jev-1.14.0"             # versioned id, never an alias
@@ -170,8 +154,7 @@ closed_book = "closed_book"
 plain = "plain_tools"
 n_boot = 10000
 boot_seed = 20261109
-primary_pairs = [["closed_book", "plain_tools"], ["plain_tools", "gpt_researcher"], ["plain_tools", "deepagents"],
-                 ["plain_tools", "hyperresearch"]]
+primary_pairs = [["closed_book", "plain_tools"], ["plain_tools", "gpt_researcher"], ["plain_tools", "deepagents"]]
 
 [freeze]
 require_clean_tagged_commit_for_main = true   # main runs refuse to start from an uncommitted or untagged tree

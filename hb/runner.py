@@ -23,7 +23,7 @@ from .gateway import Gateway
 from .systems import RUNNERS, prompt_hashes
 from .util import git_state, now, read_json, read_jsonl, secret, sha256_text, write_json, write_jsonl
 
-TERMINAL = ("completed", "partial", "refused", "funding_limit_interrupted", "safeguard_interrupted", "policy_violation", "failed_infra")
+TERMINAL = ("completed", "partial", "refused", "funding_limit_interrupted", "safeguard_interrupted", "operator_stopped", "policy_violation", "failed_infra")
 
 
 def build_manifest(cfg: dict, cdir: Path, split: str, systems: list[str], limit: int | None, mock: bool,
