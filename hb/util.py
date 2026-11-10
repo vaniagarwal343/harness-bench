@@ -72,6 +72,12 @@ def load_config(path: str | Path | None = None) -> dict:
     cfg = tomllib.loads(p.read_text())
     cfg["_path"] = str(p)
     cfg["_sha256"] = sha256_file(p)
+    # A funding ceiling raised by a recorded amendment lives in its own tracked file, so the frozen file and its hash do not change.
+    fa = p.parent / "funding_amendments.toml"
+    if fa.exists():
+        cfg["funding_amendments"] = tomllib.loads(fa.read_text())
+        for prov, v in cfg["funding_amendments"].items():
+            cfg["funding"][prov]["ceiling_usd"] = v["ceiling_usd"]
     # Confirmed account funding is operational state: private, outside the frozen file and its hash.
     fl = p.parent / "funding.local.toml"
     cfg["confirmed_funding"] = {k: v["confirmed_usd"] for k, v in tomllib.loads(fl.read_text()).items()} if fl.exists() else {}

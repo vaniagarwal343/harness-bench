@@ -2,7 +2,7 @@
 # What is confirmed to be available at each provider right now, read from its console.
 # The budget ledger refuses any reservation that would take total commitments above these.
 [anthropic]
-confirmed_usd = 310.0   # Console, 2026-11-09: balance $235.83 ($111.89 purchased + $123.92 promotional), auto-reload off; ledger committed $78.45, so the full $231.55 left under the ceiling is funded
+confirmed_usd = 355.0   # Console, 2026-11-09 21:36 PST: balance $64.07 after a further credit purchase, auto-reload off; ledger committed $309.84, so the $45.16 left under the amended ceiling is funded
 [jev]
 confirmed_usd = 10.0
 [exa]

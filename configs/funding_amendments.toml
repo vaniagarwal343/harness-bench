@@ -1,0 +1,5 @@
+# Funding ceilings changed after the freeze. Each entry names the amendment that authorised it.
+# configs/study.toml is left byte-identical to the freeze; values here take precedence over its [funding] ceilings.
+[anthropic]
+ceiling_usd = 355.0              # was 310.0 at freeze-r1
+amendment = "amendments/0002-ceiling-and-interrupted-runs.md"

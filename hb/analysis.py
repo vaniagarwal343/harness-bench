@@ -302,7 +302,10 @@ def render_markdown(res: dict) -> str:
           *[f"- Schedule revision {r['revision']} ({r['amendment']}): {len(r['removed_runs'])} runs on questions outside the retained set, "
             f"${_f(r['removed_spend_usd'] + r['removed_tool_spend_usd'], 2)} already spent, preserved and not scored; "
             f"{len(r['operator_stopped_runs'])} in-flight runs stopped at the restart and run again, ${_f(r['operator_stopped_spend_usd'], 2)}"
-            for r in res.get("schedule_revisions", [])],
+            for r in res.get("schedule_revisions", []) if r["removed_runs"] or r["operator_stopped_runs"]],
+          *[f"- Schedule revision {r['revision']} ({r['amendment']}): {len(r['funding_interrupted_runs'])} runs were interrupted by the funding ceiling and "
+            f"run again after it was raised; ${_f(r['funding_interrupted_spend_usd'] + r['funding_interrupted_tool_spend_usd'], 2)} spent on the interrupted attempts, preserved and not scored"
+            for r in res.get("schedule_revisions", []) if r.get("funding_interrupted_runs")],
           "- Grading: see the grading account below. Debugging before the campaign is in the spending ledger under its own category."]
     g = res["grading"]
     L += ["", "## Grading account", "",

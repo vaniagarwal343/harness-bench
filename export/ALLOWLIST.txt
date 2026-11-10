@@ -10,9 +10,11 @@ docs/RUNBOOK.md
 docs/FREEZE.md
 amendments/README.md
 amendments/0001-main-12-questions.md
+amendments/0002-ceiling-and-interrupted-runs.md
 configs/study.toml
 configs/splits.json
 configs/funding.example.toml
+configs/funding_amendments.toml
 hb/__init__.py
 hb/__main__.py
 hb/analysis.py
@@ -37,6 +39,7 @@ adapters/deepagents.lock.txt
 scripts/reproduce_selection.py
 scripts/make_export.py
 scripts/revise_schedule.py
+scripts/requeue_interrupted.py
 export/ALLOWLIST.txt
 data/diagnostics/cases.jsonl
 tests/test_offline.py

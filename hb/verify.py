@@ -54,6 +54,11 @@ def verify(cfg: dict, cdir: Path, tasks: dict) -> list[tuple[str, str, str]]:
         add("INFO", f"schedule revision {r['revision']}: runs outside the retained set (preserved, not scored)",
             f"{len(r['removed_runs'])} runs, ${r['removed_spend_usd']:.2f} model and ${r['removed_tool_spend_usd']:.2f} research already spent; "
             f"{len(r['operator_stopped_runs'])} in-flight runs stopped and re-queued, ${r['operator_stopped_spend_usd']:.2f}")
+        if r.get("funding_interrupted_runs"):
+            add("INFO", f"schedule revision {r['revision']}: runs interrupted by the funding ceiling and run again after it was raised (first attempts preserved, not scored)",
+                f"{len(r['funding_interrupted_runs'])} runs, ${r['funding_interrupted_spend_usd']:.2f} model and ${r['funding_interrupted_tool_spend_usd']:.2f} research spent on the interrupted attempts")
+    for prov, v in (cfg.get("funding_amendments") or {}).items():
+        add("INFO", f"{prov} ceiling amended to ${v['ceiling_usd']:.2f}", v["amendment"])
 
     # 3 model, effort, tools, cost accounting
     bad_model, viol, under, cost_bad, cb_tools, eff, intr, retried = [], [], [], [], [], [], [], []

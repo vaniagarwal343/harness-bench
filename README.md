@@ -6,7 +6,7 @@ Round 1 of a same-model comparison of deep-research systems. Claude Fable 5.2 ru
 - One run per question and configuration on the main set in `configs/splits.json`. Two further questions are unscored smoke tests.
 - B, C and D share one search backend and page reader (Exa). Runs follow their workflow to completion; cost and time are measured outcomes, not caps.
 
-**Amended after the freeze:** the main set is 12 questions (48 outputs), not 15. See `amendments/0001-main-12-questions.md`.
+**Amended after the freeze:** the main set is 12 questions (48 outputs), not 15. See `amendments/0001-main-12-questions.md`. The spending ceiling was later raised and eight interrupted runs repeated: `amendments/0002-ceiling-and-interrupted-runs.md`.
 
 Read `docs/PROTOCOL.md` for the design, `docs/COHORT.md` for how each system is configured and adapted, `docs/RUNBOOK.md` for the commands, and `docs/FREEZE.md` for how the protocol is frozen and amended.
 
