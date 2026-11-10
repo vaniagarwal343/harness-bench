@@ -155,7 +155,7 @@ def test_ledger_persists_keeps_categories_and_counts_earlier_entries(tmp_path, m
     b.spend("main", "run1", 2.25); b.spend("infrastructure_bug", "x", 1.0)
     st = budget.Budget("anthropic", CFG).status()  # a new process sees the same state
     assert st["committed"] == 6.75 and st["by_category"] == {"infrastructure_bug": 1.0, "main": 2.25, "smoke": 3.5}
-    assert st["remaining_vs_ceiling"] == 310 - 6.75
+    assert st["remaining_vs_ceiling"] == CFG["funding"]["anthropic"]["ceiling_usd"] - 6.75
 
 
 def test_no_confirmed_funding_on_file_means_nothing_can_be_spent(tmp_path, monkeypatch):
@@ -165,7 +165,7 @@ def test_no_confirmed_funding_on_file_means_nothing_can_be_spent(tmp_path, monke
 
 def test_counts_and_absence_of_per_run_caps():
     assert CFG["sampling"]["main"] == 15 and CFG["sampling"]["smoke"] == 2 and len(CFG["systems"]) == 4
-    assert "budget" not in CFG and CFG["funding"]["anthropic"]["ceiling_usd"] == 310.0
+    assert "budget" not in CFG and CFG["funding"]["anthropic"]["ceiling_usd"] == 355.0  # 310 at the freeze; raised by amendment 0002
     assert all("budget" not in s for s in CFG["systems"].values())
 
 
