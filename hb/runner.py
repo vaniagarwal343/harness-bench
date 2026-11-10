@@ -58,6 +58,11 @@ def build_manifest(cfg: dict, cdir: Path, split: str, systems: list[str], limit:
     return rows
 
 
+def campaign_commits(camp: dict) -> list[str]:
+    """Commits a campaign may run at: where it was scheduled, and each amendment commit recorded as a schedule revision."""
+    return [camp["git"]["commit"]] + [r["git"]["commit"] for r in camp.get("revisions", [])]
+
+
 def canon_splits() -> str:
     import json
     return json.dumps(load_splits(), sort_keys=True)
@@ -112,8 +117,9 @@ def run_campaign(cfg: dict, cdir: Path, mock: bool, workers: int, only: list[str
     if camp["mock"] != mock:
         raise SystemExit("a campaign scheduled with --mock must be run with --mock, and a live one without it")
     g = git_state()
-    if not mock and camp["split"] == "main" and (g["commit"] != camp["git"]["commit"] or g["dirty"]):
-        raise SystemExit(f"main must run from the exact frozen commit {camp['git']['commit']}; now at {g}")
+    allowed = campaign_commits(camp)  # the freeze commit, plus the tagged commit of each recorded schedule revision (amendments/)
+    if not mock and camp["split"] == "main" and (g["commit"] not in allowed or g["dirty"]):
+        raise SystemExit(f"main must run from a frozen commit of this campaign {allowed}; now at {g}")
     gw = Gateway(cfg, None if mock else secret("ANTHROPIC_API_KEY"), None if mock else secret("EXA_API_KEY"), mock=mock)
     if not mock and not (gw.anthropic_key and gw.tool_key):
         raise SystemExit("ANTHROPIC_API_KEY and EXA_API_KEY must be set (see .env.example), or pass --mock")

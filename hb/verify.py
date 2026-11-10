@@ -10,6 +10,7 @@ from pathlib import Path
 from .analysis import build_results, render_markdown
 from .budget import Budget
 from .grading import ERROR_STATES, OK, expected_items, final_grades
+from .runner import campaign_commits
 from .util import ROOT, canon, read_json, read_jsonl, sha256_text
 
 
@@ -42,8 +43,17 @@ def verify(cfg: dict, cdir: Path, tasks: dict) -> list[tuple[str, str, str]]:
     add("FAIL" if missing else "PASS", "every scheduled run has a terminal record", f"{len(missing)} missing: {missing[:5]}")
     extra = {p.parent.name for p in cdir.glob("outputs/*/meta.json")} - {r["run_id"] for r in manifest}
     add("FAIL" if extra else "PASS", "no outputs outside the manifest", str(sorted(extra)[:5]))
-    off = [rid for rid, m in metas.items() if (m.get("git") or {}).get("commit") != g.get("commit") or (m.get("git") or {}).get("dirty")]
-    add(bad if off else "PASS", "every run executed at the campaign's commit with a clean tree", str(off[:5]))
+    allowed = campaign_commits(camp)
+    off = [rid for rid, m in metas.items() if (m.get("git") or {}).get("commit") not in allowed or (m.get("git") or {}).get("dirty")]
+    add(bad if off else "PASS", "every run executed at the campaign's frozen commit or a recorded amendment commit, with a clean tree", str(off[:5]))
+    for r in camp.get("revisions", []):
+        rtag = any(t.startswith(cfg["freeze"]["tag_prefix"]) for t in r["git"].get("tags", [])) and not r["git"].get("dirty")
+        add("PASS" if rtag else bad, f"schedule revision {r['revision']} was made from a clean, freeze-tagged amendment commit", r["amendment"])
+        add("PASS" if sha256_text((cdir / "manifest.jsonl").read_text()) == r["manifest_sha256"] or r is not camp["revisions"][-1] else "FAIL",
+            f"manifest matches schedule revision {r['revision']}", f"{r['kept_runs']} runs kept, {len(r['removed_runs'])} removed")
+        add("INFO", f"schedule revision {r['revision']}: runs outside the retained set (preserved, not scored)",
+            f"{len(r['removed_runs'])} runs, ${r['removed_spend_usd']:.2f} model and ${r['removed_tool_spend_usd']:.2f} research already spent; "
+            f"{len(r['operator_stopped_runs'])} in-flight runs stopped and re-queued, ${r['operator_stopped_spend_usd']:.2f}")
 
     # 3 model, effort, tools, cost accounting
     bad_model, viol, under, cost_bad, cb_tools, eff, intr, retried = [], [], [], [], [], [], [], []

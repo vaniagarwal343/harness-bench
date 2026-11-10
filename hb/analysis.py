@@ -106,6 +106,7 @@ def build_results(cfg: dict, cdir: Path, tasks: dict) -> dict:
     res = dict(schema=2, mock=bool(camp.get("mock")), scored=bool(camp.get("scored")), split=camp["split"],
                config_sha256=cfg["_sha256"], manifest_sha256=sha256_file(cdir / "manifest.jsonl"), git=camp.get("git"),
                model=cfg["model"]["id"], runs=runs)
+    res["schedule_revisions"] = camp.get("revisions", [])
     res["summary"] = summarize(cfg, runs)
     res["grading"] = grading_account(cdir)
     write_json(cdir / "results.json", res)
@@ -298,6 +299,10 @@ def render_markdown(res: dict) -> str:
     L += ["", "## Runs that did not finish on their own", ""] + ([f"- {n} on {i['task_id']}: {i['why']}" for n, i in intr] or ["- none"])
     L += ["", "## Costs kept apart from run costs", "",
           "- Infrastructure retries (earlier failed attempts of a run): $" + _f(sum(t["infrastructure_retry_cost_usd"] for t in s["systems"].values()), 2),
+          *[f"- Schedule revision {r['revision']} ({r['amendment']}): {len(r['removed_runs'])} runs on questions outside the retained set, "
+            f"${_f(r['removed_spend_usd'] + r['removed_tool_spend_usd'], 2)} already spent, preserved and not scored; "
+            f"{len(r['operator_stopped_runs'])} in-flight runs stopped at the restart and run again, ${_f(r['operator_stopped_spend_usd'], 2)}"
+            for r in res.get("schedule_revisions", [])],
           "- Grading: see the grading account below. Debugging before the campaign is in the spending ledger under its own category."]
     g = res["grading"]
     L += ["", "## Grading account", "",

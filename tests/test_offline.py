@@ -341,3 +341,11 @@ def test_a_harness_stopped_by_a_safeguard_is_labelled_and_not_treated_as_a_norma
     scfg = dict(kind="subprocess", command=f"'{systems.ROOT}/.venv/bin/python' '{script}'")
     out = systems.run_subprocess("Q?", scfg, led, gw, CFG, tmp_path)
     assert out["status"] == "safeguard_interrupted" and out["report"] == "" and led.interrupted == "safeguard:llm_calls"
+
+
+def test_campaign_accepts_only_its_freeze_commit_and_recorded_amendment_commits():
+    from hb.runner import campaign_commits
+    camp = dict(git=dict(commit="aaa"))
+    assert campaign_commits(camp) == ["aaa"]
+    camp["revisions"] = [dict(git=dict(commit="bbb"))]
+    assert campaign_commits(camp) == ["aaa", "bbb"] and "ccc" not in campaign_commits(camp)

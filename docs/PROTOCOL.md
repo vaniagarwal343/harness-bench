@@ -1,5 +1,7 @@
 # Protocol, round 1
 
+> Amended after the freeze by `amendments/0001-main-12-questions.md`: the main set is 12 questions (48 outputs). The text below is as frozen.
+
 One model, four configurations, public questions with existing rubrics. This file, `configs/study.toml` and `configs/splits.json` are frozen together at a tagged commit before any main output exists. Later changes are recorded in `amendments/`.
 
 ## 1. Objective
