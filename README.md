@@ -43,7 +43,7 @@ Mock output is labelled as mock and means nothing.
 
 ## Status and limits
 
-- Nothing has been run against the real model, the real search backend or the real judges yet.
+- Before the freeze, every configuration and both judges were exercised on the two unscored smoke questions. No main-set question was run or graded before the freeze tag.
 - Scores are rubric compliance judged from report text, not verified factual accuracy.
 - Whether a cited source supports a claim is not checked in this round.
 - Contestant and judge prompt texts are not published here; their hashes are in `PROMPT_HASHES.json`. Without the texts the runs cannot be reproduced exactly.

@@ -1,6 +1,6 @@
 # Configurations and adaptations
 
-Evidence levels used below. **Read**: established from source at the pinned commit. **Mock-run**: the adapter ran end to end against this repository's gateway with a fake model and fake search backend, which exercises routing, model pinning, shared tools and accounting but says nothing about behaviour with the real model. **Live**: run against real Fable 5.2. Nothing has been run live yet.
+Evidence levels used below. **Read**: established from source at the pinned commit. **Mock-run**: the adapter ran end to end against this repository's gateway with a fake model and fake search backend, which exercises routing, model pinning, shared tools and accounting but says nothing about behaviour with the real model. **Live**: run against real Fable 5.2 on the unscored smoke questions before the freeze.
 
 | | A closed-book | B plain tools | C GPT Researcher | D Deep Agents |
 |---|---|---|---|---|
@@ -13,7 +13,7 @@ Evidence levels used below. **Read**: established from source at the pinned comm
 | Research access | none | `search`, `fetch` | custom retriever endpoint on the gateway | its search tool, re-pointed at the gateway |
 | Human checkpoints | none | none | none | none |
 | Context handling | n/a | append-only history, prompt caching | keyword filter on fetched text, 25k-word trim | summarisation at 85% of context, history offloaded to files |
-| Evidence | mock-run | mock-run | read, mock-run | read, mock-run |
+| Evidence | mock-run, live | mock-run, live | read, mock-run, live | read, mock-run, live |
 
 Full dependency pins are in `adapters/gptr.lock.txt` and `adapters/deepagents.lock.txt`.
 

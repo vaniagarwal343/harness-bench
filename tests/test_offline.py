@@ -284,7 +284,7 @@ def test_cache_key_changes_with_judge_version_mode_prompt_rubric_and_report():
     assert base != grading.item_key("jev", j, "p1", dict(c, text="says B"), "r1", "q1")
     assert base != grading.item_key("jev", j, "p1", c, "r2", "q1")
     a = CFG["judges"]["astra"]
-    assert grading.item_key("astra", a, "p", c, "r", "q", "b1") != grading.item_key("astra", dict(a, mode="single"), "p", c, "r", "q", "b1")
+    assert grading.item_key("astra", dict(a, mode="batch"), "p", c, "r", "q", "b1") != grading.item_key("astra", dict(a, mode="single"), "p", c, "r", "q", "b1")
 
 
 # ---------------------------------------------------------------- Astra through the CLI
