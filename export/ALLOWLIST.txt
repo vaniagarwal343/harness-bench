@@ -11,6 +11,7 @@ docs/FREEZE.md
 amendments/README.md
 amendments/0001-main-12-questions.md
 amendments/0002-ceiling-and-interrupted-runs.md
+amendments/0003-ai-review-side-analysis.md
 configs/study.toml
 configs/splits.json
 configs/funding.example.toml
@@ -40,6 +41,7 @@ scripts/reproduce_selection.py
 scripts/make_export.py
 scripts/revise_schedule.py
 scripts/requeue_interrupted.py
+scripts/sensitivity_ai_review.py
 export/ALLOWLIST.txt
 data/diagnostics/cases.jsonl
 tests/test_offline.py
